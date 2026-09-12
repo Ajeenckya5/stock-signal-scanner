@@ -11,7 +11,7 @@ Two desks share the same research stack. Leave `python app.py` running and the *
 
 Signals are **BUY or SELL only** (no HOLD). This is research/educational software, not financial advice.
 
-**Website:** https://ajeenckya5.github.io/broadtape/
+**Website:** [https://ajeenckya5.github.io/broadtape/](https://ajeenckya5.github.io/broadtape/) — the live desk (Overview, book, scans, 5-minute tape). It talks to the public API at `https://predi-stock.onrender.com`. First load can take a minute if that service was asleep.
 
 ---
 

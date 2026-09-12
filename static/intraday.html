@@ -7,7 +7,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/desk.css?v=term" />
+  <script>
+    (function () {
+      var pages = /\.github\.io$/.test(location.hostname);
+      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt1' : '/static/desk.css?v=bt1') + '" />');
+    })();
+  </script>
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -20,13 +25,13 @@
       </div>
       <div class="clocks" id="clocks"></div>
       <div class="top-actions">
-        <a class="btn" href="/">Research desk</a>
+        <a class="btn" id="navHome" href="/">Research desk</a>
       </div>
     </header>
     <aside class="sidebar">
       <div class="side-kicker">Desk</div>
-      <a class="nav-btn" href="/">Overview</a>
-      <a class="nav-btn" href="/#book">Signal book</a>
+      <a class="nav-btn" id="navOverview" href="/">Overview</a>
+      <a class="nav-btn" id="navBook" href="/#book">Signal book</a>
       <div class="side-kicker">Session</div>
       <button class="nav-btn active">Intraday 5m</button>
       <div class="side-foot">Session VWAP, opening range, volume POC, relative volume, cumulative delta. Autopilot refreshes while NYSE or NSE is open.</div>
@@ -58,12 +63,18 @@
     </main>
   </div>
   <script>
-    const API = (() => {
-      const p = window.location.pathname.replace(/\/$/, '');
-      if (p.endsWith('/intraday')) return window.location.origin + '/intraday';
-      return window.location.origin;
-    })();
-    const ROOT = window.location.origin;
+    const PAGES = /\.github\.io$/.test(location.hostname);
+    const ROOT = PAGES ? 'https://predi-stock.onrender.com' : window.location.origin;
+    const API = ROOT + '/intraday';
+    if (PAGES) {
+      const home = 'index.html';
+      const h = document.getElementById('navHome');
+      const o = document.getElementById('navOverview');
+      const b = document.getElementById('navBook');
+      if (h) h.href = home;
+      if (o) o.href = home;
+      if (b) b.href = home + '#book';
+    }
     const charts = new Map();
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

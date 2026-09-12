@@ -7,7 +7,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/static/desk.css?v=term2" />
+  <script>
+    (function () {
+      var pages = /\.github\.io$/.test(location.hostname);
+      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt1' : '/static/desk.css?v=bt1') + '" />');
+    })();
+  </script>
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
@@ -34,7 +39,7 @@
       <button class="nav-btn" data-view="book">Signal book <span class="nav-k">2</span></button>
       <button class="nav-btn" data-view="choose">Universe <span class="nav-k">3</span></button>
       <div class="side-kicker">Session</div>
-      <a class="nav-btn" href="/intraday">Intraday 5m <span class="nav-k">→</span></a>
+      <a class="nav-btn" id="navIntra" href="/intraday">Intraday 5m <span class="nav-k">→</span></a>
       <div class="side-foot">Pulse every 2 min. Book on your cadence. 5m tape while NYSE or NSE is open.<br><br>Educational. Not advice.</div>
     </aside>
 
@@ -200,7 +205,12 @@
   </aside>
 
   <script>
-    const API = window.location.origin;
+    const PAGES = /\.github\.io$/.test(location.hostname);
+    const API = PAGES ? 'https://predi-stock.onrender.com' : window.location.origin;
+    if (PAGES) {
+      const intra = document.getElementById('navIntra');
+      if (intra) intra.href = 'intraday.html';
+    }
     let snap = { results: [], insights: {}, pulse: [], clocks: {}, config: {}, state: {} };
     let manual = [];
     let bookFilter = '';
@@ -581,6 +591,10 @@
       } catch (e) {}
     }
     $('trainBtn').onclick = async () => {
+      if (PAGES) {
+        $('trainStatus').textContent = 'Training stays on the operator machine — this public desk reads the saved model.';
+        return;
+      }
       $('trainStatus').innerHTML = '<span class="spinner"></span> Training on max history (several minutes)…';
       try {
         const r = await fetch(`${API}/model/train`, { method: 'POST' });

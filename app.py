@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -28,6 +29,19 @@ async def lifespan(app: FastAPI):
 
 STATIC = Path(__file__).parent / "static"
 app = FastAPI(title="Broadtape | 24/7 US + India insights desk", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://ajeenckya5.github.io",
+        "https://predi-stock.onrender.com",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:8001",
+        "http://127.0.0.1:8001",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(intraday_router, prefix="/intraday")
 
 
@@ -71,13 +85,20 @@ class ScanRequest(BaseModel):
 
 
 @app.get("/")
+@app.get("/index.html")
 def serve_index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
 @app.get("/intraday")
+@app.get("/intraday.html")
 def serve_intraday():
     return FileResponse(Path(__file__).parent / "static" / "intraday.html")
+
+
+@app.get("/desk.css")
+def serve_desk_css():
+    return FileResponse(STATIC / "desk.css", media_type="text/css")
 
 
 @app.get("/search")
