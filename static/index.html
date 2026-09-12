@@ -42,7 +42,7 @@
       <div class="side-kicker">Horizon</div>
       <button class="nav-btn active" id="navLong" type="button">Long-term</button>
       <a class="nav-btn" id="navIntra" href="/intraday">Intraday 5m <span class="nav-k">→</span></a>
-      <div class="side-foot">Pulse every 2 min. Book on your cadence. 5m tape while NYSE or NSE is open.<br><br>Educational. Not advice.</div>
+      <div class="side-foot">Prices, pulse, and open charts refresh every minute. Book factors on your cadence. 5m tape while NYSE or NSE is open.<br><br>Educational. Not advice.</div>
     </aside>
 
     <main class="main">
@@ -173,6 +173,7 @@
               <div>
                 <label class="flab" for="interval">Cadence</label>
                 <select id="interval" class="field">
+                  <option value="60">Every 1 min</option>
                   <option value="300">Every 5 min</option>
                   <option value="900" selected>Every 15 min</option>
                   <option value="1800">Every 30 min</option>
@@ -269,6 +270,9 @@
     let moveHiOnly = false;
     let searchTimeout = null;
     let drawerChart = null;
+    let drawerSeries = null;
+    let drawerTicker = null;
+    let chartBusy = false;
 
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -333,7 +337,7 @@
     });
     if ($('candle')) $('candle').onchange = () => applyHorizon($('candle').value);
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') $('drawer').classList.remove('open');
+      if (e.key === 'Escape') { $('drawer').classList.remove('open'); drawerTicker = null; }
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
       if (e.key === '1') showView('overview');
       if (e.key === '2') showView('book');
@@ -573,18 +577,30 @@
           <button class="feedback-btn" data-t="${esc(r.ticker)}" data-a="${esc(r.action)}" data-ok="false">Wrong</button>
         </div>`;
       $('drawer').classList.add('open');
-      loadChart(r.ticker);
+      drawerTicker = r.ticker;
+      loadChart(r.ticker, false);
     }
 
-    async function loadChart(ticker) {
+    async function loadChart(ticker, silent) {
       const wrap = $('dchart');
       if (!wrap) return;
-      wrap.innerHTML = '<div class="hint" style="padding:1rem">Loading chart…</div>';
+      if (chartBusy) return;
+      chartBusy = true;
+      if (!silent) wrap.innerHTML = '<div class="hint" style="padding:1rem">Loading chart…</div>';
       try {
         const period = lastCandle === '24h' ? '2y' : 'max';
-        const res = await fetch(`${API}/chart/${encodeURIComponent(ticker)}?period=${period}&fwd_days=5&candle=${encodeURIComponent(lastCandle)}`);
+        const res = await fetch(`${API}/chart/${encodeURIComponent(ticker)}?period=${period}&fwd_days=5&candle=${encodeURIComponent(lastCandle)}&_=${Date.now()}`);
         const p = await res.json();
         if (!res.ok) throw new Error(p.detail || p.error || 'chart failed');
+        if (drawerTicker !== ticker) return;
+        const candles = p.candles || [];
+        if (silent && drawerSeries && drawerChart) {
+          drawerSeries.setData(candles);
+          if (p.markers) drawerSeries.setMarkers(p.markers);
+          const hp = p.historical_prediction || {};
+          if ($('dlegend')) $('dlegend').textContent = hp.summary || 'Support green · resistance red.';
+          return;
+        }
         wrap.innerHTML = '';
         if (drawerChart) { try { drawerChart.remove(); } catch(e){} }
         const chart = LightweightCharts.createChart(wrap, {
@@ -595,19 +611,25 @@
           crosshair: { vertLine: { color: '#4a4640' }, horzLine: { color: '#4a4640' } },
         });
         const series = chart.addCandlestickSeries({ upColor: '#7aaf7e', downColor: '#c97a73', borderVisible: false, wickUpColor: '#7aaf7e', wickDownColor: '#c97a73' });
-        series.setData(p.candles || []);
+        series.setData(candles);
         if (p.markers) series.setMarkers(p.markers);
         (p.price_lines || []).forEach(pl => series.createPriceLine({ price: pl.price, color: pl.color, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: pl.title || '' }));
         chart.timeScale().fitContent();
         drawerChart = chart;
+        drawerSeries = series;
         const hp = p.historical_prediction || {};
         $('dlegend').textContent = hp.summary || 'Support green · resistance red.';
       } catch (e) {
-        wrap.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+        if (!silent) wrap.innerHTML = `<div class="error-msg">${esc(e.message)}</div>`;
+      } finally {
+        chartBusy = false;
       }
     }
 
-    $('closeDrawer').onclick = () => $('drawer').classList.remove('open');
+    $('closeDrawer').onclick = () => {
+      $('drawer').classList.remove('open');
+      drawerTicker = null;
+    };
     document.querySelectorAll('.chip[data-filter]').forEach(c => {
       c.onclick = () => {
         document.querySelectorAll('.chip[data-filter]').forEach(x => x.classList.remove('active'));
@@ -634,12 +656,14 @@
       const st = d.state || {};
       const cfg = d.config || {};
       $('autoOn').checked = !!cfg.enabled;
-      $('autoMeta').textContent = st.scan_in_progress ? 'scanning…' : (st.last_scan_at ? 'updated ' + String(st.last_scan_at).slice(11, 19) + ' UTC' : 'starting…');
+      const liveAt = st.last_quote_at || st.last_pulse_at || st.last_scan_at;
+      $('autoMeta').textContent = st.scan_in_progress ? 'scanning…' : (liveAt ? 'live ' + String(liveAt).slice(11, 19) + ' UTC' : 'starting…');
       const editing = document.activeElement && ['universe','candle','interval','maxNames','watch','tickers'].includes(document.activeElement.id);
       if (!editing) {
         if ($('universe') && cfg.universe) $('universe').value = cfg.universe;
         if ($('candle') && cfg.candle) $('candle').value = cfg.candle;
         if ($('maxNames') && cfg.max_names) $('maxNames').value = String(cfg.max_names);
+        if ($('interval') && cfg.interval_sec) $('interval').value = String(cfg.interval_sec);
         if ($('intraOn')) $('intraOn').checked = cfg.intraday_enabled !== false;
         if ($('watch') && Array.isArray(cfg.watchlist)) $('watch').value = cfg.watchlist.join(', ');
       }
@@ -819,8 +843,13 @@
       } catch {}
       await refreshDesk();
       await refreshModel();
-      setInterval(refreshDesk, 8000);
-      setInterval(refreshModel, 4000);
+      setInterval(refreshDesk, 15000);
+      setInterval(refreshModel, 15000);
+      setInterval(() => {
+        if ($('drawer') && $('drawer').classList.contains('open') && drawerTicker) {
+          loadChart(drawerTicker, true);
+        }
+      }, 60000);
     })();
   </script>
 </body>

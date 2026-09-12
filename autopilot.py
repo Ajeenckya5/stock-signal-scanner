@@ -20,6 +20,7 @@ _CFG_PATH = os.path.join(_DIR, ".desk_config.json")
 _SNAP_PATH = os.path.join(_DIR, ".desk_snapshot.json")
 
 MAX_AUTOPILOT = 160
+LIVE_SEC = 60
 PULSE_SYMBOLS = ["SPY", "QQQ", "IWM", "^NSEI", "^NSEBANK"]
 
 DEFAULT_CONFIG: Dict[str, Any] = {
@@ -43,6 +44,7 @@ _state: Dict[str, Any] = {
     "last_error": None,
     "last_scan_at": None,
     "last_pulse_at": None,
+    "last_quote_at": None,
     "last_intraday_at": None,
     "next_scan_at": None,
     "scan_in_progress": False,
@@ -326,12 +328,18 @@ def _run_intraday(cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
             "market": r.get("market"),
             "currency": r.get("currency"),
             "reasons": (r.get("reasons") or [])[:4],
+            "stop_loss": r.get("stop_loss"),
+            "take_profit": r.get("take_profit"),
+            "forecast": r.get("forecast"),
+            "candles": (r.get("candles") or [])[-90:],
+            "vwap_line": r.get("vwap_line"),
+            "price_lines": r.get("price_lines"),
             "error": r.get("error"),
         })
     return out
 
 
-def _close_series(raw, sym):
+def _close_series(raw, sym, min_len: int = 1):
     import pandas as pd
 
     try:
@@ -347,66 +355,144 @@ def _close_series(raw, sym):
             col = "Close" if "Close" in raw.columns else "close"
             close = raw[col]
         close = pd.to_numeric(close, errors="coerce").dropna()
-        return close if len(close) >= 2 else None
+        return close if len(close) >= min_len else None
     except Exception:
         return None
 
 
-def _run_pulse() -> List[Dict[str, Any]]:
-    import pandas as pd
+def _yf_download(symbols: List[str], period: str, interval: str):
     import yfinance as yf
 
-    labels = {
-        "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
-        "^NSEI": "Nifty 50", "^NSEBANK": "Bank Nifty",
-    }
-    raw = None
+    if not symbols:
+        return None
     try:
-        raw = yf.download(
-            tickers=PULSE_SYMBOLS,
-            period="5d",
-            interval="1d",
+        return yf.download(
+            tickers=symbols if len(symbols) > 1 else symbols[0],
+            period=period,
+            interval=interval,
             progress=False,
             auto_adjust=True,
             threads=False,
             group_by="ticker",
         )
     except Exception:
-        raw = None
+        return None
 
-    out = []
+
+def _batch_last(symbols: List[str], live: bool) -> Dict[str, float]:
+    names = [str(s).strip() for s in symbols if str(s).strip()]
+    names = list(dict.fromkeys(names))
+    if not names:
+        return {}
+    interval = "1m" if live else "1d"
+    period = "1d" if live else "5d"
+    raw = _yf_download(names, period, interval)
+    out: Dict[str, float] = {}
     missing = []
-    for sym in PULSE_SYMBOLS:
-        close = _close_series(raw, sym)
+    for sym in names:
+        close = _close_series(raw, sym, min_len=1)
         if close is None:
             missing.append(sym)
             continue
-        px = float(close.iloc[-1])
-        prev = float(close.iloc[-2])
-        chg = (px / prev - 1.0) * 100 if prev else 0.0
+        out[sym] = float(close.iloc[-1])
+    if missing:
+        fb = _yf_download(missing, "5d", "1d")
+        for sym in missing:
+            close = _close_series(fb, sym, min_len=1)
+            if close is not None:
+                out[sym] = float(close.iloc[-1])
+    return out
+
+
+def _implied_prev(row: Dict[str, Any]) -> Optional[float]:
+    px = row.get("price")
+    chg = row.get("change_pct")
+    try:
+        px_f = float(px)
+        chg_f = float(chg if chg is not None else 0)
+    except (TypeError, ValueError):
+        return None
+    if px_f <= 0:
+        return None
+    denom = 1.0 + chg_f / 100.0
+    if abs(denom) < 1e-9:
+        return None
+    return px_f / denom
+
+
+def _patch_live_prices(rows: List[Dict[str, Any]], pxmap: Dict[str, float]) -> List[Dict[str, Any]]:
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        nr = dict(r)
+        t = nr.get("ticker")
+        px = pxmap.get(t)
+        if px is None:
+            out.append(nr)
+            continue
+        prev = _implied_prev(nr)
+        nr["price"] = round(float(px), 4 if (nr.get("candle") == "5m" or (nr.get("atr") is not None and nr.get("vwap") is not None)) else 2)
+        if prev:
+            nr["change_pct"] = round((float(px) / prev - 1.0) * 100.0, 3 if nr.get("vwap") is not None else 2)
+        if (nr.get("action") or "") in ("BUY", "SELL"):
+            nr.pop("forecast", None)
+            nr["forecast"] = _forecast_for(nr)
+        out.append(nr)
+    return out
+
+
+def _apply_live_quotes() -> None:
+    snap = _load_json(_SNAP_PATH, {})
+    rows = snap.get("results") or []
+    intra = snap.get("intraday") or []
+    names = []
+    for r in rows + intra:
+        if isinstance(r, dict) and r.get("ticker"):
+            names.append(r["ticker"])
+    live = bool(market_clocks().get("any_cash_open"))
+    pxmap = _batch_last(names, live=live)
+    if not pxmap:
+        return
+    new_rows = _patch_live_prices(rows, pxmap)
+    new_intra = _patch_live_prices(intra, pxmap)
+    kwargs: Dict[str, Any] = {}
+    if new_rows:
+        kwargs["results"] = new_rows
+        kwargs["insights"] = build_insights(new_rows)
+    if new_intra:
+        kwargs["intraday"] = new_intra
+        kwargs["intraday_insights"] = build_insights(new_intra)
+    if kwargs:
+        _write_snapshot(**kwargs)
+    with _lock:
+        _state["last_quote_at"] = _now_iso()
+
+
+def _run_pulse() -> List[Dict[str, Any]]:
+    labels = {
+        "SPY": "S&P 500", "QQQ": "Nasdaq 100", "IWM": "Russell 2000",
+        "^NSEI": "Nifty 50", "^NSEBANK": "Bank Nifty",
+    }
+    daily = _yf_download(PULSE_SYMBOLS, "5d", "1d")
+    live = bool(market_clocks().get("any_cash_open"))
+    minute = _yf_download(PULSE_SYMBOLS, "1d", "1m") if live else None
+    out = []
+    for sym in PULSE_SYMBOLS:
+        dclose = _close_series(daily, sym, min_len=2)
+        if dclose is None:
+            continue
+        prev = float(dclose.iloc[-2])
+        last = float(dclose.iloc[-1])
+        mclose = _close_series(minute, sym, min_len=1) if minute is not None else None
+        if mclose is not None:
+            last = float(mclose.iloc[-1])
         out.append({
             "symbol": sym,
             "label": labels.get(sym, sym),
-            "price": round(px, 2),
-            "change_pct": round(chg, 2),
+            "price": round(last, 2),
+            "change_pct": round((last / prev - 1.0) * 100, 2) if prev else 0.0,
         })
-    for sym in missing:
-        try:
-            hist = yf.Ticker(sym).history(period="5d", interval="1d", auto_adjust=True)
-            close = pd.to_numeric(hist["Close"] if "Close" in hist.columns else hist["close"], errors="coerce").dropna()
-            if len(close) < 2:
-                continue
-            px = float(close.iloc[-1])
-            prev = float(close.iloc[-2])
-            chg = (px / prev - 1.0) * 100 if prev else 0.0
-            out.append({
-                "symbol": sym,
-                "label": labels.get(sym, sym),
-                "price": round(px, 2),
-                "change_pct": round(chg, 2),
-            })
-        except Exception:
-            continue
     return out
 
 
@@ -427,7 +513,7 @@ def update_config(patch: Dict[str, Any]) -> Dict[str, Any]:
             from ohlc import normalize_candle
             cfg["candle"] = normalize_candle(patch["candle"])
         if patch.get("interval_sec") is not None:
-            cfg["interval_sec"] = int(max(120, min(int(patch["interval_sec"]), 7200)))
+            cfg["interval_sec"] = int(max(60, min(int(patch["interval_sec"]), 7200)))
         if "watchlist" in patch and patch["watchlist"] is not None:
             cfg["watchlist"] = [str(x).strip().upper() for x in patch["watchlist"] if str(x).strip()][:40]
         if "indicators" in patch:
@@ -489,21 +575,30 @@ def _write_snapshot(**kwargs) -> None:
 
 def run_cycle(kind: str = "full") -> Dict[str, Any]:
     cfg = get_config()
+    heavy = kind in ("long", "full", "intraday")
     with _lock:
-        _state["scan_in_progress"] = True
+        if heavy:
+            _state["scan_in_progress"] = True
         _state["last_error"] = None
     try:
-        if kind in ("pulse", "full"):
+        if kind in ("pulse", "full", "live"):
             pulse = _run_pulse()
             _write_snapshot(pulse=pulse)
             with _lock:
                 _state["last_pulse_at"] = _now_iso()
+        if kind in ("quotes", "live"):
+            scanning = False
+            with _lock:
+                scanning = bool(_state.get("scan_in_progress"))
+            if not scanning:
+                _apply_live_quotes()
         if kind in ("long", "full") and cfg.get("enabled"):
             rows = _run_long_scan(cfg)
             insights = build_insights(rows)
             _write_snapshot(results=rows, insights=insights)
             with _lock:
                 _state["last_scan_at"] = _now_iso()
+                _state["last_quote_at"] = _now_iso()
                 _state["names"] = len(rows)
                 _state["next_scan_at"] = datetime.fromtimestamp(
                     time.time() + int(cfg.get("interval_sec") or 900), tz=timezone.utc
@@ -532,20 +627,20 @@ def request_run(kind: str = "full") -> None:
 
 
 def _loop() -> None:
-    next_pulse = 0.0
+    next_live = 0.0
     next_scan = 0.0
     next_intra = 0.0
     with _lock:
         _state["running"] = True
     # First pass: pulse quickly, then a full scan so the dashboard is not empty.
     try:
-        run_cycle("pulse")
+        run_cycle("live")
         cfg = get_config()
         if cfg.get("enabled"):
             run_cycle("full")
             next_scan = time.time() + int(cfg.get("interval_sec") or 900)
-            next_intra = time.time() + 300
-        next_pulse = time.time() + 120
+            next_intra = time.time() + LIVE_SEC
+        next_live = time.time() + LIVE_SEC
     except Exception as e:
         with _lock:
             _state["last_error"] = str(e)
@@ -561,17 +656,21 @@ def _loop() -> None:
                 run_cycle("full" if force == "full" else force)
                 if force in ("full", "long"):
                     next_scan = now + int(cfg.get("interval_sec") or 900)
+                if force in ("live", "pulse", "quotes"):
+                    next_live = now + LIVE_SEC
+                if force == "intraday":
+                    next_intra = now + LIVE_SEC
             else:
-                if now >= next_pulse:
-                    run_cycle("pulse")
-                    next_pulse = now + 120
+                if now >= next_live:
+                    run_cycle("live")
+                    next_live = now + LIVE_SEC
                 if cfg.get("enabled") and now >= next_scan:
                     run_cycle("long")
                     next_scan = now + int(cfg.get("interval_sec") or 900)
                 clocks = market_clocks()
                 if cfg.get("enabled") and cfg.get("intraday_enabled") and clocks.get("any_cash_open") and now >= next_intra:
                     run_cycle("intraday")
-                    next_intra = now + 300
+                    next_intra = now + LIVE_SEC
         except Exception as e:
             with _lock:
                 _state["last_error"] = str(e)

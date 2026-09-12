@@ -68,8 +68,8 @@ def desk_config(req: DeskConfig):
 @app.post("/desk/run")
 def desk_run(req: DeskRun):
     k = (req.kind or "full").lower()
-    if k not in ("full", "pulse", "long", "intraday"):
-        raise HTTPException(status_code=400, detail="kind must be full, pulse, long, or intraday")
+    if k not in ("full", "pulse", "long", "intraday", "live", "quotes"):
+        raise HTTPException(status_code=400, detail="kind must be full, pulse, long, intraday, live, or quotes")
     autopilot.request_run(k)
     return {"status": "queued", "kind": k}
 

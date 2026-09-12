@@ -35,7 +35,7 @@
       <div class="side-kicker">Horizon</div>
       <a class="nav-btn" id="navLong" href="/">Long-term</a>
       <button class="nav-btn active" type="button">Intraday 5m</button>
-      <div class="side-foot">Session VWAP, opening range, volume POC, relative volume, cumulative delta. Autopilot refreshes while NYSE or NSE is open.</div>
+      <div class="side-foot">Tape and charts refresh every minute while NYSE or NSE is open. Yahoo keeps about 60 sessions of 5-minute bars.</div>
     </aside>
     <main class="main">
       <div class="page-head">
@@ -89,6 +89,7 @@
       if (nl) nl.href = home;
     }
     const charts = new Map();
+    let lastTapeCharts = 0;
     const $ = (id) => document.getElementById(id);
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     function currSym(t, c) {
@@ -155,12 +156,21 @@
           ['Conviction', ins ? ins.high_conviction : 0, ''],
           ['Auto names', intra.length, ''],
         ].map(([l,v,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div></div>`).join('');
-        if (!$('results').dataset.manual && intra.length) render(intra, false);
         paintMoves(intra);
+        if (!$('results').dataset.manual && intra.length) {
+          const due = Date.now() - lastTapeCharts > 55000;
+          const hasCandles = intra.some(r => r.candles && r.candles.length);
+          if (due) {
+            render(intra, hasCandles);
+            lastTapeCharts = Date.now();
+          }
+        }
       } catch (e) {}
     }
 
     function render(list, withCharts) {
+      charts.forEach(c => { try { c.remove(); } catch(e){} });
+      charts.clear();
       if (!list.length) { $('results').innerHTML = '<p class="hint">No 5m rows.</p>'; return; }
       $('results').innerHTML = list.map((r, i) => {
         const curr = currSym(r.ticker, r.currency);
@@ -218,6 +228,7 @@
         if (!res.ok) throw new Error(data.detail || res.statusText);
         $('results').dataset.manual = '1';
         render(data.results || [], true);
+        lastTapeCharts = Date.now();
         paintMoves(data.results || []);
         $('status').textContent = `${(data.results||[]).length} names`;
       } catch (e) {
@@ -227,6 +238,24 @@
 
     clocks();
     setInterval(clocks, 10000);
+    setInterval(async () => {
+      if (!$('results').dataset.manual) return;
+      const raw = $('tickers').value.trim();
+      try {
+        const res = await fetch(`${API}/scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tickers: raw ? raw.split(/[\s,]+/).filter(Boolean) : undefined,
+            universe: raw ? undefined : $('universe').value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) return;
+        render(data.results || [], true);
+        lastTapeCharts = Date.now();
+        paintMoves(data.results || []);
+      } catch (e) {}
+    }, 60000);
 
     (function bindSearch() {
       const inp = $('tickers'), ac = $('autocomplete');

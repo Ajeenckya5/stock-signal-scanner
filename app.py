@@ -2,7 +2,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -177,6 +177,7 @@ def indicators_catalog_endpoint():
 @app.get("/chart/{ticker}")
 def chart_live_endpoint(
     ticker: str,
+    response: Response,
     period: str = "2y",
     interval: str = "1d",
     fwd_days: int = 5,
@@ -186,6 +187,7 @@ def chart_live_endpoint(
     OHLCV candles + pattern markers & S/R lines + historical forward-edge prediction.
     candle: 24h | 1mo | 3mo | 6mo
     """
+    response.headers["Cache-Control"] = "no-store, max-age=0"
     payload = build_chart_payload(
         ticker,
         period=period,
@@ -347,8 +349,8 @@ def desk_config(req: DeskConfig):
 @app.post("/desk/run")
 def desk_run(req: DeskRun):
     kind = (req.kind or "full").lower()
-    if kind not in ("full", "pulse", "long", "intraday"):
-        raise HTTPException(status_code=400, detail="kind must be full, pulse, long, or intraday")
+    if kind not in ("full", "pulse", "long", "intraday", "live", "quotes"):
+        raise HTTPException(status_code=400, detail="kind must be full, pulse, long, intraday, live, or quotes")
     autopilot.request_run(kind)
     return {"status": "queued", "kind": kind}
 
