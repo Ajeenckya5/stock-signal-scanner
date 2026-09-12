@@ -19,10 +19,17 @@ build/
 *.pkl
 *.pickle
 .ticker_cache.csv
+.ticker_cache_us.csv
 .ticker_cache_india.csv
 .signals_store.json
 .rlhf_weights.json
 .rlhf_feedback.json
+.desk_config.json
+.desk_snapshot.json
+.pred_model.joblib
+.pred_model_meta.json
+.pred_model_meta.json.tmp
+.pred_cache/
 
 # IDE
 .idea/

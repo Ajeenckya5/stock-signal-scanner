@@ -1,20 +1,34 @@
 from pathlib import Path
+from contextlib import asynccontextmanager
+from typing import Optional, List
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import Optional, List
 
 from scanner import scan_tickers, INDICATOR_CATALOG
-from ticker_data import search_tickers, get_ticker_count, get_nifty50_tickers, load_all_tickers
+from ticker_data import get_nifty50_tickers, load_all_tickers
+from markets import search_tickers, ticker_count, universe_symbols, benchmark_symbol
 from signals_store import add_to_lists, get_lists, clear_lists
 from rlhf import record_feedback, get_stats, reset_weights
 from chart_analysis import build_chart_payload
+from ohlc import CANDLE_SPECS, LONGTERM_CANDLES, normalize_candle, fetch_ohlcv
+from quant_engine import RESEARCH_CATALOG, compute_quant_bundle, try_fundamentals
+from intraday_routes import router as intraday_router
+import autopilot
 
-# Run with: python app.py (uses uvicorn under the hood)
-# Or manually: uvicorn app:app --reload --host 0.0.0.0 --port 8000
 
-app = FastAPI(title="predi_stock | Stock Buy & Sell Signals")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    autopilot.start()
+    yield
+    autopilot.stop()
+
+
+STATIC = Path(__file__).parent / "static"
+app = FastAPI(title="predi | 24/7 US + India insights desk", lifespan=lifespan)
+app.include_router(intraday_router, prefix="/intraday")
 
 
 class TrainRequest(BaseModel):
@@ -46,12 +60,14 @@ class AgentResponse(BaseModel):
 
 class ScanRequest(BaseModel):
     tickers: Optional[List[str]] = None
-    period: str = "3mo"
+    period: Optional[str] = None
     filter_action: Optional[str] = None
-    universe: Optional[str] = None  # "nifty50" | "all" = all India tickers in DB
+    universe: Optional[str] = None  # mix | nifty50 | all | us_mega | sp100 | nasdaq100 | sp500
     save_to_lists: bool = False  # add results to predefined BUY/SELL lists
     # Subset of indicator ids for composite score (see GET /indicators/catalog). None = use all.
     indicators: Optional[List[str]] = None
+    candle: str = "24h"  # 24h | 1mo | 3mo | 6mo
+    market: Optional[str] = None  # all | us | in (search only)
 
 
 @app.get("/")
@@ -59,23 +75,76 @@ def serve_index():
     return FileResponse(Path(__file__).parent / "static" / "index.html")
 
 
+@app.get("/intraday")
+def serve_intraday():
+    return FileResponse(Path(__file__).parent / "static" / "intraday.html")
+
+
 @app.get("/search")
-def search_endpoint(q: str = "", limit: int = 20):
-    """Search stocks by symbol or company name."""
-    results = search_tickers(q, limit=limit)
+def search_endpoint(q: str = "", limit: int = 20, market: str = "all"):
+    """Search US + Indian stocks by symbol or company name."""
+    results = search_tickers(q, limit=limit, market=market)
     return {"tickers": results}
 
 
 @app.get("/tickers/count")
-def ticker_count_endpoint():
-    """Return total tickers in database."""
-    return {"count": get_ticker_count()}
+def ticker_count_endpoint(market: str = "all"):
+    """Return ticker counts by market."""
+    return ticker_count(market)
 
 
 @app.get("/tickers/nifty50")
 def nifty50_endpoint():
     """Return all Nifty 50 tickers for scan."""
     return {"tickers": get_nifty50_tickers(), "count": 50}
+
+
+@app.get("/universes")
+def universes_endpoint():
+    return {
+        "universes": [
+            {"id": "liquid", "label": "Liquid mix (fast, 18 names)"},
+            {"id": "trained", "label": "Trained set (Nifty 50 + S&P 100)"},
+            {"id": "mix", "label": "Nifty 50 + US mega-caps"},
+            {"id": "nifty50", "label": "Nifty 50 (India)"},
+            {"id": "nifty_next50", "label": "Nifty Next 50"},
+            {"id": "all", "label": "All Indian names in DB"},
+            {"id": "us_mega", "label": "US mega-caps"},
+            {"id": "sp100", "label": "S&P 100"},
+            {"id": "nasdaq100", "label": "Nasdaq-100"},
+            {"id": "sp500", "label": "S&P 500 (slow)"},
+        ]
+    }
+
+
+@app.get("/candles")
+def candles_endpoint():
+    return {
+        "candles": [
+            {"id": k, "label": CANDLE_SPECS[k]["label"], "ann": CANDLE_SPECS[k]["ann"]}
+            for k in LONGTERM_CANDLES
+        ]
+    }
+
+
+@app.get("/research/catalog")
+def research_catalog_endpoint():
+    return {"papers": RESEARCH_CATALOG}
+
+
+@app.get("/research/{ticker}")
+def research_endpoint(ticker: str, candle: str = "24h", period: Optional[str] = None):
+    """Full quant dossier + optional fundamentals (slow)."""
+    cndl = normalize_candle(candle)
+    df, meta = fetch_ohlcv(ticker, candle=cndl, period=period)
+    if df.empty:
+        raise HTTPException(status_code=400, detail=meta.get("error") or "no data")
+    bdf, _ = fetch_ohlcv(benchmark_symbol(ticker), candle=cndl, period=period)
+    bench = bdf["close"] if not bdf.empty else None
+    bundle = compute_quant_bundle(df, ticker, candle=cndl, benchmark=bench)
+    bundle["fundamentals"] = try_fundamentals(ticker)
+    bundle["papers"] = RESEARCH_CATALOG
+    return bundle
 
 
 @app.get("/indicators/catalog")
@@ -87,16 +156,21 @@ def indicators_catalog_endpoint():
 @app.get("/chart/{ticker}")
 def chart_live_endpoint(
     ticker: str,
-    period: str = "1y",
+    period: str = "2y",
     interval: str = "1d",
     fwd_days: int = 5,
+    candle: str = "24h",
 ):
     """
     OHLCV candles + pattern markers & S/R lines + historical forward-edge prediction.
-    Use a longer ``period`` (e.g. 1y–2y) so past-regime statistics are meaningful.
+    candle: 24h | 1mo | 3mo | 6mo
     """
     payload = build_chart_payload(
-        ticker, period=period, interval=interval, fwd_days=max(1, min(fwd_days, 20))
+        ticker,
+        period=period,
+        interval=interval,
+        fwd_days=max(1, min(fwd_days, 20)),
+        candle=candle,
     )
     err = payload.get("error")
     if err:
@@ -152,21 +226,29 @@ def feedback_reset_endpoint():
 def scan_endpoint(req: ScanRequest):
     try:
         tickers = req.tickers
+        candle = normalize_candle(req.candle)
+        period = req.period
+        if not period:
+            period = "max" if candle in ("1mo", "3mo", "6mo") else "2y"
         if not tickers:
             if req.universe == "nifty50":
                 tickers = [t["symbol"] for t in get_nifty50_tickers()]
             elif req.universe == "all":
                 df = load_all_tickers()
                 tickers = df["symbol"].astype(str).tolist()
+            else:
+                tickers = universe_symbols(req.universe)
         results = scan_tickers(
             tickers=tickers,
-            period=req.period,
+            period=period,
             filter_action=req.filter_action,
             indicators=req.indicators,
+            candle=candle,
+            universe=req.universe,
         )
         if req.save_to_lists and results:
             add_to_lists(results)
-        return {"results": results, "count": len(results)}
+        return {"results": results, "count": len(results), "candle": candle}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -208,6 +290,61 @@ def agent_endpoint(req: AgentRequest):
         raise HTTPException(status_code=400, detail=str(e)) from e
 
     return AgentResponse(**result)
+
+
+class DeskConfig(BaseModel):
+    enabled: Optional[bool] = None
+    universe: Optional[str] = None
+    candle: Optional[str] = None
+    interval_sec: Optional[int] = None
+    watchlist: Optional[List[str]] = None
+    indicators: Optional[List[str]] = None
+    intraday_enabled: Optional[bool] = None
+    max_names: Optional[int] = None
+
+
+class DeskRun(BaseModel):
+    kind: str = "full"
+
+
+@app.get("/desk/snapshot")
+def desk_snapshot():
+    return autopilot.get_snapshot()
+
+
+@app.get("/desk/status")
+def desk_status():
+    return autopilot.get_status()
+
+
+@app.post("/desk/config")
+def desk_config(req: DeskConfig):
+    patch = req.model_dump(exclude_unset=True) if hasattr(req, "model_dump") else req.dict(exclude_unset=True)
+    return autopilot.update_config(patch)
+
+
+@app.post("/desk/run")
+def desk_run(req: DeskRun):
+    kind = (req.kind or "full").lower()
+    if kind not in ("full", "pulse", "long", "intraday"):
+        raise HTTPException(status_code=400, detail="kind must be full, pulse, long, or intraday")
+    autopilot.request_run(kind)
+    return {"status": "queued", "kind": kind}
+
+
+@app.get("/model")
+def model_report():
+    from pred_model import get_report
+    return get_report()
+
+
+@app.post("/model/train")
+def model_train():
+    from pred_model import start_train_async
+    return start_train_async()
+
+
+app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
 if __name__ == "__main__":

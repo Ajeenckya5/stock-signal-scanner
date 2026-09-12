@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>predi · Intraday</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/desk.css?v=term" />
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">predi</div>
+        <span class="brand-sub">Intraday</span>
+        <span class="live-pill"><i></i>5m</span>
+      </div>
+      <div class="clocks" id="clocks"></div>
+      <div class="top-actions">
+        <a class="btn" href="/">Research desk</a>
+      </div>
+    </header>
+    <aside class="sidebar">
+      <div class="side-kicker">Desk</div>
+      <a class="nav-btn" href="/">Overview</a>
+      <a class="nav-btn" href="/#book">Signal book</a>
+      <div class="side-kicker">Session</div>
+      <button class="nav-btn active">Intraday 5m</button>
+      <div class="side-foot">Session VWAP, opening range, volume POC, relative volume, cumulative delta. Autopilot refreshes while NYSE or NSE is open.</div>
+    </aside>
+    <main class="main">
+      <div class="page-head">
+        <h1>Five-minute tape</h1>
+        <p class="page-sub">Yahoo history is about 60 sessions. Not Level-2.</p>
+      </div>
+      <div class="kpis" id="kpis"></div>
+      <div class="panel" style="margin-bottom:0.85rem">
+        <h2>Session note</h2>
+        <p class="headline" id="headline">Waiting for 5-minute tape…</p>
+      </div>
+      <div class="toolbar">
+        <div class="search-wrap">
+          <input id="tickers" placeholder="AAPL, NVDA, RELIANCE.NS — or use autopilot 5m book" autocomplete="off" />
+          <div class="autocomplete" id="autocomplete"></div>
+        </div>
+        <select id="universe" class="field" style="width:auto">
+          <option value="intraday">Liquid mix</option>
+          <option value="us_mega">US mega</option>
+          <option value="nifty50">Nifty 50</option>
+        </select>
+        <button class="btn btn-primary" id="scanBtn">Scan 5m now</button>
+        <span class="status" id="status"></span>
+      </div>
+      <div class="grid" id="results"></div>
+    </main>
+  </div>
+  <script>
+    const API = (() => {
+      const p = window.location.pathname.replace(/\/$/, '');
+      if (p.endsWith('/intraday')) return window.location.origin + '/intraday';
+      return window.location.origin;
+    })();
+    const ROOT = window.location.origin;
+    const charts = new Map();
+    const $ = (id) => document.getElementById(id);
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    function currSym(t, c) {
+      if (c === 'INR' || (t && (String(t).endsWith('.NS') || String(t).endsWith('.BO')))) return '₹';
+      return '$';
+    }
+    function fmt(v, n=2) { return v == null ? '—' : Number(v).toFixed(n); }
+
+    async function clocks() {
+      try {
+        const d = await (await fetch(ROOT + '/desk/snapshot')).json();
+        const sess = (d.clocks && d.clocks.sessions) || [];
+        $('clocks').innerHTML = sess.map(s => `<div class="sess"><span class="dot ${esc(s.status)}"></span><strong>${esc(s.name)}</strong><span class="mono">${esc((s.local_time||'').slice(0,5))}</span><span>${esc(s.status)}</span></div>`).join('');
+        const intra = d.intraday || [];
+        const ins = d.intraday_insights;
+        if (ins && ins.headline) $('headline').textContent = ins.headline;
+        else if (d.clocks && d.clocks.any_cash_open === false)
+          $('headline').textContent = 'Cash sessions closed. Pulse still runs; 5m autopilot waits for NYSE or NSE.';
+        $('kpis').innerHTML = [
+          ['5m longs', ins ? ins.buy_count : 0, 'buy'],
+          ['5m shorts', ins ? ins.sell_count : 0, 'sell'],
+          ['Conviction', ins ? ins.high_conviction : 0, ''],
+          ['Auto names', intra.length, ''],
+        ].map(([l,v,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div></div>`).join('');
+        if (!$('results').dataset.manual && intra.length) render(intra, false);
+      } catch (e) {}
+    }
+
+    function render(list, withCharts) {
+      if (!list.length) { $('results').innerHTML = '<p class="hint">No 5m rows.</p>'; return; }
+      $('results').innerHTML = list.map((r, i) => {
+        const curr = currSym(r.ticker, r.currency);
+        const chg = (r.change_pct || 0) >= 0 ? 'up' : 'down';
+        const reasons = (r.reasons || []).slice(0, 5).map(x => `<li>${esc(x)}</li>`).join('');
+        const cid = 'c-' + i;
+        return `<div class="card" style="cursor:default">
+          <div class="card-h"><span class="ticker">${esc(r.ticker)}</span><span class="tag ${(r.action||'').toLowerCase()}">${esc(r.action)}</span></div>
+          <div class="price">${curr}${fmt(r.price)}</div>
+          <div class="${chg} mono">${r.change_pct>=0?'+':''}${fmt(r.change_pct,3)}%</div>
+          <div class="meta">RSI ${fmt(r.rsi,1)} · RVOL ${fmt(r.rvol)}x · VWAP ${r.vwap != null ? curr+fmt(r.vwap) : '—'}</div>
+          <div class="meta">SL ${curr}${fmt(r.stop_loss)} · TP ${curr}${fmt(r.take_profit)}</div>
+          ${reasons ? `<ul class="alert-list">${reasons}</ul>` : ''}
+          ${withCharts ? `<div class="chart-wrap" id="${cid}"></div>` : ''}
+        </div>`;
+      }).join('');
+      if (!withCharts) return;
+      list.forEach((r, i) => {
+        const wrap = document.getElementById('c-' + i);
+        if (!wrap || !r.candles || !window.LightweightCharts) return;
+        const chart = LightweightCharts.createChart(wrap, {
+          layout: { background: { type: 'solid', color: '#141312' }, textColor: '#9a958c' },
+          grid: { vertLines: { color: '#262422' }, horzLines: { color: '#262422' } },
+          width: wrap.clientWidth, height: 240,
+          timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#2c2a26' },
+          rightPriceScale: { borderColor: '#2c2a26' },
+        });
+        const series = chart.addCandlestickSeries({ upColor: '#7aaf7e', downColor: '#c97a73', borderVisible: false, wickUpColor: '#7aaf7e', wickDownColor: '#c97a73' });
+        series.setData(r.candles);
+        if (r.vwap_line && r.vwap_line.length > 2) chart.addLineSeries({ color: '#eab308', lineWidth: 2 }).setData(r.vwap_line);
+        (r.price_lines || []).forEach(pl => series.createPriceLine({ price: pl.price, color: pl.color, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: pl.title || '' }));
+        chart.timeScale().fitContent();
+        charts.set('c-' + i, chart);
+      });
+    }
+
+    $('scanBtn').onclick = async () => {
+      const btn = $('scanBtn');
+      btn.disabled = true;
+      $('autocomplete').style.display = 'none';
+      $('status').innerHTML = '<span class="spinner"></span> Pulling 5m…';
+      charts.forEach(c => { try { c.remove(); } catch(e){} });
+      charts.clear();
+      const raw = $('tickers').value.trim();
+      try {
+        const res = await fetch(`${API}/scan`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tickers: raw ? raw.split(/[\s,]+/).filter(Boolean) : undefined,
+            universe: raw ? undefined : $('universe').value,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || res.statusText);
+        $('results').dataset.manual = '1';
+        render(data.results || [], true);
+        $('status').textContent = `${(data.results||[]).length} names`;
+      } catch (e) {
+        $('status').innerHTML = `<span class="error-msg">${esc(e.message)}</span>`;
+      } finally { btn.disabled = false; }
+    };
+
+    clocks();
+    setInterval(clocks, 10000);
+
+    (function bindSearch() {
+      const inp = $('tickers'), ac = $('autocomplete');
+      let t = null;
+      inp.addEventListener('input', () => {
+        const last = (inp.value.split(/[\s,]+/).pop() || '');
+        if (t) clearTimeout(t);
+        if (last.length < 2) { ac.style.display = 'none'; return; }
+        t = setTimeout(async () => {
+          const r = await fetch(ROOT + '/search?q=' + encodeURIComponent(last) + '&limit=12');
+          const items = (await r.json()).tickers || [];
+          if (!items.length) { ac.style.display = 'none'; return; }
+          ac.innerHTML = items.map(x => `<div class="autocomplete-item" data-s="${esc(x.symbol)}"><span class="ticker">${esc(x.symbol)}</span><span style="color:var(--muted)">${esc(x.name||'')}</span></div>`).join('');
+          ac.style.display = 'block';
+          ac.querySelectorAll('.autocomplete-item').forEach(el => {
+            el.onclick = () => {
+              const cur = inp.value.trim().split(/[\s,]+/).filter(Boolean);
+              if (!cur.includes(el.dataset.s)) inp.value = cur.length ? cur.join(', ') + ', ' + el.dataset.s : el.dataset.s;
+              ac.style.display = 'none';
+            };
+          });
+        }, 180);
+      });
+      inp.addEventListener('blur', () => setTimeout(() => ac.style.display = 'none', 150));
+    })();
+  </script>
+</body>
+</html>

@@ -30,6 +30,8 @@ DEFAULT_WEIGHTS = {
     "stoch_rsi": 1.0,
     "pattern": 1.0,
     "news": 1.0,
+    "quant": 1.0,
+    "ml": 1.15,
 }
 
 # Feedback history for adaptive learning
@@ -110,7 +112,10 @@ def record_feedback(
 
 def get_weights() -> Dict[str, float]:
     """Return current learned weights for use in scanner."""
-    return _load_weights()
+    weights = _load_weights()
+    for k, v in DEFAULT_WEIGHTS.items():
+        weights.setdefault(k, v)
+    return weights
 
 
 def get_stats() -> Dict:

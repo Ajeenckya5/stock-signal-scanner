@@ -1,8 +1,9 @@
 """
 Multi-Stock Technical Analysis Scanner
 ======================================
-Scans Indian equities (NSE .NS) using RSI, MACD, Bollinger Bands, and momentum
-to produce BUY or SELL signals only (no HOLD — weak signals resolve by score sign).
+Scans US and Indian equities using classical TA plus an institutional quant overlay
+(momentum, volatility, Hurst, CAPM, VWAP, Ichimoku, …) to produce BUY or SELL only.
+Long-term candles: 24h (daily), 1 month, 3 month, 6 month.
 """
 
 import numpy as np
@@ -268,13 +269,18 @@ class SignalResult:
     error: Optional[str] = None
     # Which indicators were used for scoring (None = all). Same order as request after normalize.
     indicators_for_score: Optional[List[str]] = None
+    market: Optional[str] = None
+    currency: Optional[str] = None
+    candle: Optional[str] = None
+    quant: Optional[Dict] = None
+    ml: Optional[Dict] = None
 
 
 # Indicators that participate in the composite score (manual selection applies to these).
 ALL_SCORING_INDICATORS = frozenset({
     "rsi", "macd", "bollinger", "sma", "momentum", "volume",
     "stochastic", "williams_r", "cci", "adx", "obv", "stoch_rsi",
-    "pattern", "news",
+    "quant", "ml",
 })
 
 # Maximum absolute contribution of each factor to the raw score (before RLHF weight).
@@ -283,6 +289,7 @@ _FACTOR_CAPS = {
     "rsi": 0.8, "macd": 0.5, "bollinger": 0.6, "sma": 0.4, "momentum": 0.3,
     "volume": 0.2, "stochastic": 0.4, "williams_r": 0.35, "cci": 0.3,
     "adx": 0.25, "obv": 0.2, "stoch_rsi": 0.35, "pattern": 0.5, "news": 0.6,
+    "quant": 0.55, "ml": 0.7,
 }
 
 INDICATOR_ALIASES = {
@@ -310,6 +317,8 @@ INDICATOR_CATALOG: List[Dict[str, str]] = [
     {"id": "stoch_rsi", "label": "Stochastic RSI"},
     {"id": "pattern", "label": "Chart patterns"},
     {"id": "news", "label": "News sentiment"},
+    {"id": "quant", "label": "Quant desk (momentum, Hurst, CAPM, vol, Ichimoku)"},
+    {"id": "ml", "label": "Trained 5-day model (walk-forward evaluated)"},
 ]
 
 
@@ -371,48 +380,58 @@ def _binary_action(score: float) -> str:
 
 def analyze_ticker(
     ticker: str,
-    period: str = "3mo",
+    period: str = "2y",
     indicators: Optional[List[str]] = None,
+    candle: str = "24h",
+    benchmark: Optional[pd.Series] = None,
 ) -> SignalResult:
     """
-    Compute technical indicators and produce a composite BUY or SELL signal.
+    Compute technical indicators + quant overlay and produce a composite BUY or SELL signal.
     ``indicators``: if set, only those factors contribute to the score (manual mode).
+    ``candle``: 24h | 1mo | 3mo | 6mo
     """
+    from ohlc import fetch_ohlcv, lookbacks, normalize_candle, CANDLE_SPECS
+    from markets import currency_for, market_for
+
+    candle = normalize_candle(candle)
+    spec = CANDLE_SPECS[candle]
+    min_bars = int(spec.get("min_bars", 20))
     applied_labels = _indicators_applied_list(normalize_indicator_set(indicators))
     reasons = []
     try:
-        data = yf.download(ticker, period=period, progress=False, auto_adjust=True)
-        if data.empty or len(data) < 30:
-            # IMPORTANT: no data is NOT a sell signal. Mark as ERROR so it never
-            # pollutes the SELL list or RLHF feedback.
+        data, meta = fetch_ohlcv(ticker, candle=candle, period=period)
+        if data.empty or len(data) < min_bars:
             return SignalResult(
                 ticker=ticker, action="ERROR", score=0, price=0, change_pct=0,
                 rsi=None, macd_hist=None, bb_position=None, momentum_10d=None,
-                volume_ratio=None, reasons=["Insufficient price history (<30 bars) — no signal"],
+                volume_ratio=None, reasons=[
+                    f"Insufficient price history (<{min_bars} {candle} bars) — no signal"
+                ],
                 buy_zone=None, stop_loss=None, take_profit=None, support=None, resistance=None,
                 news=[], news_sentiment=None, news_impact=None, pattern_signals=None, pattern_score=None,
-                factors_used=None, error="Not enough history",
+                factors_used=None, error=meta.get("error") or "Not enough history",
                 indicators_for_score=applied_labels,
+                market=market_for(ticker), currency=currency_for(ticker), candle=candle,
             )
 
-        # Handle multi-index from yf
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = [c[0].lower() if isinstance(c, tuple) else str(c).lower() for c in data.columns]
-        data.columns = [c.lower() for c in data.columns]
         close = data["close"]
         volume = data["volume"] if "volume" in data.columns else pd.Series(1.0, index=data.index)
+        lb = lookbacks(candle, len(close))
 
-        # Compute indicators
-        rsi = compute_rsi(close).iloc[-1] if len(close) >= 15 else np.nan
+        rsi_s = compute_rsi(close, lb["rsi"])
+        rsi = rsi_s.iloc[-1] if len(rsi_s) else np.nan
         macd_line, sig_line, hist = compute_macd(close)
         macd_hist = hist.iloc[-1] if len(hist) > 0 and not pd.isna(hist.iloc[-1]) else np.nan
 
-        bb_u, bb_m, bb_l = compute_bollinger(close)
+        bb_u, bb_m, bb_l = compute_bollinger(close, lb["bb"])
         bb_pos = _get_bb_position(close.iloc[-1], bb_u.iloc[-1], bb_m.iloc[-1], bb_l.iloc[-1])
 
-        sma_10, sma_50 = compute_sma_crossover(close)
-        mom = compute_momentum(close).iloc[-1] if len(close) >= 11 else np.nan
-        vol_ratio = compute_volume_sma_ratio(volume).iloc[-1] if len(volume) >= 21 else np.nan
+        sma_10, sma_50 = compute_sma_crossover(close, lb["sma_s"], lb["sma_l"])
+        mom = compute_momentum(close, lb["mom"]).iloc[-1] if len(close) >= lb["mom"] + 1 else np.nan
+        vol_ratio = (
+            compute_volume_sma_ratio(volume, lb["vol"]).iloc[-1]
+            if len(volume) >= lb["vol"] + 1 else np.nan
+        )
 
         price = float(close.iloc[-1])
         prev_close = float(close.iloc[-2]) if len(close) >= 2 else price
@@ -491,16 +510,16 @@ def analyze_ticker(
                 reasons.append("Price near upper Bollinger")
 
         # SMA crossover: short > long = bullish
-        if scoring_active("sma", enabled) and len(close) >= 51:
+        if scoring_active("sma", enabled) and len(close) >= lb["sma_l"] + 1:
             w = weights.get("sma", 1.0)
             factors_used.append("sma")
             s10, s50 = sma_10.iloc[-1], sma_50.iloc[-1]
             if s10 > s50:
                 score += 0.4 * w
-                reasons.append("SMA 10 > SMA 50")
+                reasons.append(f"SMA {lb['sma_s']} > SMA {lb['sma_l']}")
             else:
                 score -= 0.4 * w
-                reasons.append("SMA 10 < SMA 50")
+                reasons.append(f"SMA {lb['sma_s']} < SMA {lb['sma_l']}")
 
         # Momentum (10d): positive = bullish
         if scoring_active("momentum", enabled) and not pd.isna(mom):
@@ -509,7 +528,7 @@ def analyze_ticker(
             mom_norm = np.clip(mom / 15, -1, 1)
             score += mom_norm * 0.3 * w
             if abs(mom) > 5:
-                reasons.append(f"10d momentum {mom:+.1f}%")
+                reasons.append(f"{lb['mom']}-bar momentum {mom:+.1f}%")
 
         # Volume confirmation: high vol on up move = stronger signal
         if scoring_active("volume", enabled) and not pd.isna(vol_ratio) and vol_ratio > 1.2:
@@ -642,6 +661,40 @@ def analyze_ticker(
         except Exception:
             pass
 
+        quant_bundle = None
+        try:
+            from quant_engine import compute_quant_bundle
+            quant_bundle = compute_quant_bundle(
+                data, ticker, candle=candle, benchmark=benchmark
+            )
+            qscore = quant_bundle.get("quant_score")
+            if scoring_active("quant", enabled) and qscore is not None:
+                w = weights.get("quant", 1.0)
+                factors_used.append("quant")
+                score += float(qscore) * 0.55 * w
+                for msg in (quant_bundle.get("quant_reasons") or [])[:4]:
+                    reasons.append(msg)
+        except Exception:
+            quant_bundle = None
+
+        ml_pred = None
+        try:
+            from pred_model import predict_last
+            ml_pred = predict_last(data)
+            if scoring_active("ml", enabled) and ml_pred and ml_pred.get("p_buy") is not None:
+                w = weights.get("ml", 1.15)
+                pb = float(ml_pred["p_buy"])
+                # Only blend high-confidence calls; pooled OOS is barely above chance.
+                if pb >= 0.62 or pb <= 0.38:
+                    factors_used.append("ml")
+                    edge = (pb - 0.5) * 2.0
+                    score += edge * 0.7 * w
+                oos = ml_pred.get("oos_accuracy")
+                bit = f" · OOS hit {oos:.0%}" if isinstance(oos, (int, float)) and oos else ""
+                reasons.append(f"Trained model P(lead {ml_pred.get('horizon', 5)}d)={pb:.2f}{bit}")
+        except Exception:
+            ml_pred = None
+
         # Normalize to [-1, 1]: raw score / max possible score of the factors that
         # actually fired = "evidence consensus". A shrinkage term damps signals
         # backed by only 1-2 factors so a single mild indicator can't look strong.
@@ -659,14 +712,14 @@ def analyze_ticker(
         # BUY or SELL only (no HOLD — weak band maps by score sign)
         action = _binary_action(float(score))
 
-        # Support / Resistance (20-day low/high)
-        low_20 = float(close.rolling(20).min().iloc[-1]) if len(close) >= 20 else price * 0.97
-        high_20 = float(close.rolling(20).max().iloc[-1]) if len(close) >= 20 else price * 1.03
+        sr_n = max(6, lb["bb"])
+        low_20 = float(close.rolling(sr_n).min().iloc[-1]) if len(close) >= sr_n else price * 0.97
+        high_20 = float(close.rolling(sr_n).max().iloc[-1]) if len(close) >= sr_n else price * 1.03
         support = low_20
         resistance = high_20
 
         # ATR for stop placement
-        atr = compute_atr(high_series, low_series, close, 14).iloc[-1] if len(close) >= 15 else price * 0.02
+        atr = compute_atr(high_series, low_series, close, lb["atr"]).iloc[-1] if len(close) >= lb["atr"] + 1 else price * 0.02
         atr = float(atr) if not (pd.isna(atr) or atr <= 0) else price * 0.02
 
         # Buy zone, SL, TP by action
@@ -744,9 +797,15 @@ def analyze_ticker(
             target_achieve_days=target_days,
             target_achieve_date=target_date,
             indicators_for_score=_indicators_applied_list(enabled),
+            market=market_for(ticker),
+            currency=currency_for(ticker),
+            candle=candle,
+            quant=quant_bundle,
+            ml=ml_pred,
         )
 
     except Exception as e:
+        from markets import currency_for as _cf, market_for as _mf
         return SignalResult(
             ticker=ticker, action="ERROR", score=0, price=0, change_pct=0,
             rsi=None, macd_hist=None, bb_position=None, momentum_10d=None,
@@ -755,35 +814,70 @@ def analyze_ticker(
             news=[], news_sentiment=None, news_impact=None, pattern_signals=None, pattern_score=None,
             factors_used=None, error=str(e),
             indicators_for_score=applied_labels,
+            market=_mf(ticker), currency=_cf(ticker), candle=candle,
         )
 
 
 def scan_tickers(
     tickers: Optional[List[str]] = None,
-    period: str = "3mo",
+    period: str = "2y",
     filter_action: Optional[str] = None,
     indicators: Optional[List[str]] = None,
+    candle: str = "24h",
+    universe: Optional[str] = None,
 ) -> List[Dict]:
     """
     Scan a list of tickers and return signal results.
     filter_action: "BUY" | "SELL" | None (return all)
     indicators: optional subset of factor ids for scoring (manual mode); None = all.
+    candle: 24h | 1mo | 3mo | 6mo
     """
-    tickers = tickers or DEFAULT_TICKERS
-    # Parallel fetch+analyze: sequential scans of 90+ tickers took minutes.
-    # Order of results matches the input ticker order.
+    from ohlc import fetch_ohlcv, normalize_candle
+    from markets import benchmark_symbol, universe_symbols
+    from quant_engine import cross_section_ranks
+
+    candle = normalize_candle(candle)
+    if not tickers:
+        tickers = universe_symbols(universe)
+    tickers = [str(t).strip() for t in tickers if str(t).strip()]
+
+    bench_cache: Dict[str, Optional[pd.Series]] = {}
+    for sym in {benchmark_symbol(t) for t in tickers}:
+        df, _ = fetch_ohlcv(sym, candle=candle, period=period)
+        bench_cache[sym] = df["close"] if df is not None and not df.empty else None
+
+    def _bench_for(t: str) -> Optional[pd.Series]:
+        return bench_cache.get(benchmark_symbol(t))
+
     max_workers = min(8, max(1, len(tickers)))
     if max_workers > 1:
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             analyzed = list(ex.map(
-                lambda t: analyze_ticker(t, period=period, indicators=indicators), tickers
+                lambda t: analyze_ticker(
+                    t, period=period, indicators=indicators, candle=candle, benchmark=_bench_for(t)
+                ),
+                tickers,
             ))
     else:
-        analyzed = [analyze_ticker(t, period=period, indicators=indicators) for t in tickers]
+        analyzed = [
+            analyze_ticker(t, period=period, indicators=indicators, candle=candle, benchmark=_bench_for(t))
+            for t in tickers
+        ]
+
+    compact_q = (
+        "quant_score", "sharpe", "sortino", "calmar", "max_drawdown_pct", "var95_pct",
+        "cvar95_pct", "beta", "alpha_ann_pct", "hurst", "hurst_read", "ou_halflife_bars",
+        "momentum_skip_pct", "reversal_pct", "rel_strength_pct", "vol_yang_zhang",
+        "vol_garch11", "vol_ewma", "vol_regime", "kelly_half", "efficiency_ratio",
+        "amihud", "ichimoku", "supertrend", "quant_reasons",
+    )
 
     results = []
     for r in analyzed:
         buy_zone_ser = [round(r.buy_zone[0], 2), round(r.buy_zone[1], 2)] if r.buy_zone else None
+        q = None
+        if r.quant and isinstance(r.quant, dict):
+            q = {k: r.quant.get(k) for k in compact_q if k in r.quant}
         d = {
             "ticker": r.ticker,
             "action": r.action,
@@ -821,8 +915,14 @@ def scan_tickers(
             "target_achieve_date": r.target_achieve_date,
             "error": r.error,
             "indicators_for_score": r.indicators_for_score,
+            "market": r.market,
+            "currency": r.currency,
+            "candle": r.candle,
+            "quant": q,
+            "ml": r.ml,
         }
         if filter_action and r.action != filter_action:
             continue
         results.append(d)
+    results = cross_section_ranks(results)
     return results
