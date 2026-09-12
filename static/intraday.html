@@ -10,7 +10,7 @@
   <script>
     (function () {
       var pages = /\.github\.io$/.test(location.hostname);
-      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt1' : '/static/desk.css?v=bt1') + '" />');
+      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt2' : '/static/desk.css?v=bt2') + '" />');
     })();
   </script>
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -25,15 +25,16 @@
       </div>
       <div class="clocks" id="clocks"></div>
       <div class="top-actions">
-        <a class="btn" id="navHome" href="/">Research desk</a>
+        <a class="btn" id="navHome" href="/">Long-term desk</a>
       </div>
     </header>
     <aside class="sidebar">
       <div class="side-kicker">Desk</div>
       <a class="nav-btn" id="navOverview" href="/">Overview</a>
       <a class="nav-btn" id="navBook" href="/#book">Signal book</a>
-      <div class="side-kicker">Session</div>
-      <button class="nav-btn active">Intraday 5m</button>
+      <div class="side-kicker">Horizon</div>
+      <a class="nav-btn" id="navLong" href="/">Long-term</a>
+      <button class="nav-btn active" type="button">Intraday 5m</button>
       <div class="side-foot">Session VWAP, opening range, volume POC, relative volume, cumulative delta. Autopilot refreshes while NYSE or NSE is open.</div>
     </aside>
     <main class="main">
@@ -71,9 +72,11 @@
       const h = document.getElementById('navHome');
       const o = document.getElementById('navOverview');
       const b = document.getElementById('navBook');
+      const nl = document.getElementById('navLong');
       if (h) h.href = home;
       if (o) o.href = home;
       if (b) b.href = home + '#book';
+      if (nl) nl.href = home;
     }
     const charts = new Map();
     const $ = (id) => document.getElementById(id);

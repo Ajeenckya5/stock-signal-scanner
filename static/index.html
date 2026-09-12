@@ -10,7 +10,7 @@
   <script>
     (function () {
       var pages = /\.github\.io$/.test(location.hostname);
-      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt1' : '/static/desk.css?v=bt1') + '" />');
+      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt2' : '/static/desk.css?v=bt2') + '" />');
     })();
   </script>
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -20,7 +20,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="logo">Broadtape</div>
-        <span class="brand-sub">Research</span>
+        <span class="brand-sub">Long-term</span>
         <span class="live-pill"><i></i>Live</span>
       </div>
       <div class="clocks" id="clocks"></div>
@@ -38,7 +38,8 @@
       <button class="nav-btn active" data-view="overview">Overview <span class="nav-k">1</span></button>
       <button class="nav-btn" data-view="book">Signal book <span class="nav-k">2</span></button>
       <button class="nav-btn" data-view="choose">Universe <span class="nav-k">3</span></button>
-      <div class="side-kicker">Session</div>
+      <div class="side-kicker">Horizon</div>
+      <button class="nav-btn active" id="navLong" type="button">Long-term</button>
       <a class="nav-btn" id="navIntra" href="/intraday">Intraday 5m <span class="nav-k">→</span></a>
       <div class="side-foot">Pulse every 2 min. Book on your cadence. 5m tape while NYSE or NSE is open.<br><br>Educational. Not advice.</div>
     </aside>
@@ -47,7 +48,15 @@
       <section class="view active" id="view-overview">
         <div class="page-head">
           <h1>Overview</h1>
-          <p class="page-sub">US and India · background analysis</p>
+          <p class="page-sub" id="pageSub">Long-term · Daily 24h · US and India</p>
+        </div>
+        <div class="horizon" id="horizonBar">
+          <span class="hlab">Long-term</span>
+          <button class="chip active" type="button" data-horizon="24h">Daily 24h</button>
+          <button class="chip" type="button" data-horizon="1mo">1 month</button>
+          <button class="chip" type="button" data-horizon="3mo">3 month</button>
+          <button class="chip" type="button" data-horizon="6mo">6 month</button>
+          <a class="chip" id="horizonIntra" href="/intraday">Intraday 5m</a>
         </div>
         <p class="model-bar" id="modelBar"></p>
         <div class="kpis" id="kpis"></div>
@@ -79,7 +88,14 @@
       <section class="view" id="view-book">
         <div class="page-head">
           <h1>Signal book</h1>
-          <p class="page-sub">Click a name for chart, levels, and notes</p>
+          <p class="page-sub" id="bookSub">Long-term book · Daily 24h</p>
+        </div>
+        <div class="horizon">
+          <span class="hlab">Long-term</span>
+          <button class="chip active" type="button" data-horizon="24h">Daily 24h</button>
+          <button class="chip" type="button" data-horizon="1mo">1 month</button>
+          <button class="chip" type="button" data-horizon="3mo">3 month</button>
+          <button class="chip" type="button" data-horizon="6mo">6 month</button>
         </div>
         <div class="toolbar">
           <button class="chip active" data-filter="">All</button>
@@ -95,7 +111,7 @@
       <section class="view" id="view-choose">
         <div class="page-head">
           <h1>Universe</h1>
-          <p class="page-sub">What runs in the background, and a one-off scan when you want it</p>
+          <p class="page-sub">Long-term candles live here too — Daily, 1 month, 3 month, 6 month</p>
         </div>
         <div class="choose-grid">
           <div class="panel">
@@ -114,12 +130,12 @@
             </select>
             <div class="row-2">
               <div>
-                <label class="flab" for="candle">Candle</label>
+                <label class="flab" for="candle">Long-term candle</label>
                 <select id="candle" class="field">
-                  <option value="24h">24h / Daily</option>
-                  <option value="1mo">1 month</option>
-                  <option value="3mo">3 month</option>
-                  <option value="6mo">6 month</option>
+                  <option value="24h">Daily (24h)</option>
+                  <option value="1mo">Monthly</option>
+                  <option value="3mo">Quarterly (3 month)</option>
+                  <option value="6mo">Semi-annual (6 month)</option>
                 </select>
               </div>
               <div>
@@ -210,6 +226,8 @@
     if (PAGES) {
       const intra = document.getElementById('navIntra');
       if (intra) intra.href = 'intraday.html';
+      const hi = document.getElementById('horizonIntra');
+      if (hi) hi.href = 'intraday.html';
     }
     let snap = { results: [], insights: {}, pulse: [], clocks: {}, config: {}, state: {} };
     let manual = [];
@@ -240,13 +258,46 @@
     });
     function showView(name) {
       if (!name || !$('view-' + name)) name = 'overview';
-      document.querySelectorAll('.nav-btn').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('.nav-btn[data-view]').forEach(x => x.classList.remove('active'));
       const btn = document.querySelector(`.nav-btn[data-view="${name}"]`);
       if (btn) btn.classList.add('active');
+      if ($('navLong')) $('navLong').classList.add('active');
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
       $('view-' + name).classList.add('active');
       if (location.hash.replace('#', '') !== name) history.replaceState(null, '', '#' + name);
     }
+    if ($('navLong')) $('navLong').onclick = () => showView('overview');
+
+    const HORIZON_LABELS = { '24h': 'Daily 24h', '1mo': '1 month', '3mo': '3 month', '6mo': '6 month' };
+    function paintHorizon(c) {
+      lastCandle = c || lastCandle || '24h';
+      document.querySelectorAll('[data-horizon]').forEach(el => {
+        el.classList.toggle('active', el.dataset.horizon === lastCandle);
+      });
+      const lab = HORIZON_LABELS[lastCandle] || lastCandle;
+      if ($('pageSub')) $('pageSub').textContent = 'Long-term · ' + lab + ' · US and India';
+      if ($('bookSub')) $('bookSub').textContent = 'Long-term book · ' + lab;
+    }
+    async function applyHorizon(c) {
+      if (!c) return;
+      paintHorizon(c);
+      if ($('candle')) $('candle').value = c;
+      if ($('autoMeta')) $('autoMeta').textContent = 'switching horizon…';
+      try {
+        await fetch(`${API}/desk/config`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ candle: c }),
+        });
+        await fetch(`${API}/desk/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'long' }) });
+      } catch (e) {}
+    }
+    document.querySelectorAll('[data-horizon]').forEach(el => {
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        applyHorizon(el.dataset.horizon);
+      });
+    });
+    if ($('candle')) $('candle').onchange = () => applyHorizon($('candle').value);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') $('drawer').classList.remove('open');
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
@@ -421,6 +472,7 @@
     function applySnap(d) {
       snap = d;
       lastCandle = (d.config && d.config.candle) || lastCandle;
+      paintHorizon(lastCandle);
       renderClocks(d.clocks || {});
       renderPulse(d.pulse || []);
       renderKpis(d.insights || {}, d.state || {});
@@ -471,6 +523,8 @@
           intraday_enabled: $('intraOn').checked,
         }),
       });
+      lastCandle = $('candle').value || '24h';
+      paintHorizon(lastCandle);
       await fetch(`${API}/desk/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'full' }) });
       $('deskSaveStatus').textContent = 'Saved. Background pass started.';
       setTimeout(refreshDesk, 2500);
@@ -539,13 +593,10 @@
         if (!res.ok) throw new Error(data.detail || res.statusText);
         manual = data.results || [];
         lastCandle = $('candle').value || '24h';
+        paintHorizon(lastCandle);
         bookSrc = 'manual';
         $('srcManual').classList.add('active'); $('srcAuto').classList.remove('active');
-        document.querySelectorAll('.nav-btn').forEach(x => x.classList.remove('active'));
-        document.querySelector('.nav-btn[data-view="book"]').classList.add('active');
-        document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-        $('view-book').classList.add('active');
-        if (location.hash.replace('#', '') !== 'book') history.replaceState(null, '', '#book');
+        showView('book');
         renderBook();
         $('status').textContent = `Manual book: ${manual.length} names`;
       } catch (e) {
