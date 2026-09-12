@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>predi · Research desk</title>
+  <meta name="description" content="24/7 US and India BUY/SELL research desk. Walk-forward evaluated 5-day model on Nifty 50 + S&amp;P 100. Educational, not advice." />
+  <link rel="canonical" href="https://ajeenckya5.github.io/predi/" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect fill='%2312110f' width='32' height='32'/><text x='6' y='23' font-family='Georgia' font-size='16' fill='%23c9a227'>p</text></svg>" />
+  <meta property="og:title" content="predi · Research desk" />
+  <meta property="og:description" content="US + India insights desk with a walk-forward 5-day model. Educational research, not advice." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div class="brand">
+        <div class="logo">predi</div>
+        <span class="kicker">Research</span>
+      </div>
+      <nav class="nav">
+        <a class="hide" href="#eval">Evaluation</a>
+        <a class="hide" href="#run">Run locally</a>
+        <a href="https://github.com/Ajeenckya5/stock-signal-scanner">Source</a>
+        <a class="btn btn-ivory" href="https://github.com/Ajeenckya5/stock-signal-scanner">GitHub</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <h1>A 24/7 desk for US and India names.</h1>
+      <p class="lede">
+        Autopilot keeps a BUY/SELL book on daily, monthly, and 5-minute candles.
+        A walk-forward model scores whether a name leads its market over the next five sessions.
+        Research software. Not a broker, and not advice.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-ivory" href="https://github.com/Ajeenckya5/stock-signal-scanner">Open the source</a>
+        <a class="btn" href="#run">Run on localhost:8000</a>
+      </div>
+      <div class="clocks" id="clocks"></div>
+    </section>
+
+    <div class="strip">
+      <div class="stat"><div class="v">51.05%</div><div class="l">OOS hit rate · 301,289 days</div></div>
+      <div class="stat"><div class="v up">59.67%</div><div class="l">High-confidence hit rate</div></div>
+      <div class="stat"><div class="v">159</div><div class="l">Names trained · cap 160</div></div>
+      <div class="stat"><div class="v">838k</div><div class="l">Daily bars · 2004–2026</div></div>
+    </div>
+
+    <section class="section">
+      <h2>Two desks, one stack</h2>
+      <div class="grid-2">
+        <div class="panel">
+          <h3>Insights</h3>
+          <p>24h / 1 month / 3 month / 6 month. Nifty 50, S&amp;P 100, Nasdaq-100, or a liquid mix. Background pulse on SPY, QQQ, IWM, Nifty, Bank Nifty. Max names 18–160.</p>
+        </div>
+        <div class="panel">
+          <h3>Intraday 5m</h3>
+          <p>Session VWAP, opening range, volume POC, relative volume, cumulative delta while NYSE or NSE is open. Yahoo keeps about 60 sessions of 5-minute bars.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="eval">
+      <h2>Walk-forward, not a backtest curve</h2>
+      <p>
+        HistGradientBoosting on 21 daily TA features. Label = beats that session’s same-market median over the next 5 days.
+        Train years are embargoed 10 days from each test year (2019–2026). Pooled accuracy is 0.6 pp above the majority class and 1.2 pp above 21-day momentum.
+        High-confidence calls (p ≥ 0.62 or ≤ 0.38) hit 59.7% with a +2.13 pp five-session spread — on 729 of 301k days.
+      </p>
+      <div class="note">
+        That is a small research edge, not a live trading system. The desk blends the model into score only when confidence is high.
+      </div>
+      <div class="chart">
+        <div class="chart-cap">Yearly out-of-sample hit rate · purged walk-forward · Nifty 50 + S&amp;P 100</div>
+        <div class="bars" aria-hidden="true">
+          <div class="bar-col"><div class="bar" style="height:74%"></div><span>2019</span></div>
+          <div class="bar-col"><div class="bar" style="height:64%"></div><span>2020</span></div>
+          <div class="bar-col"><div class="bar" style="height:19%"></div><span>2021</span></div>
+          <div class="bar-col"><div class="bar" style="height:38%"></div><span>2022</span></div>
+          <div class="bar-col"><div class="bar" style="height:79%"></div><span>2023</span></div>
+          <div class="bar-col"><div class="bar" style="height:86%"></div><span>2024</span></div>
+          <div class="bar-col"><div class="bar" style="height:60%"></div><span>2025</span></div>
+          <div class="bar-col"><div class="bar" style="height:85%"></div><span>2026</span></div>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Year</th><th>OOS n</th><th>Model</th><th>Majority</th><th>Momentum</th><th>5d spread</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>2019</td><td>38,385</td><td>51.35%</td><td>50.64%</td><td>48.58%</td><td>+0.17 pp</td></tr>
+          <tr><td>2020</td><td>39,024</td><td>51.11%</td><td>50.45%</td><td>50.50%</td><td>+0.09 pp</td></tr>
+          <tr><td>2021</td><td>39,009</td><td>49.98%</td><td>50.29%</td><td>50.17%</td><td>+0.06 pp</td></tr>
+          <tr><td>2022</td><td>39,362</td><td>50.44%</td><td>50.44%</td><td>49.84%</td><td>+0.33 pp</td></tr>
+          <tr><td>2023</td><td>39,255</td><td>51.47%</td><td>50.63%</td><td>49.69%</td><td>+0.22 pp</td></tr>
+          <tr><td>2024</td><td>39,597</td><td>51.64%</td><td>50.53%</td><td>50.51%</td><td>+0.18 pp</td></tr>
+          <tr><td>2025</td><td>39,700</td><td>51.01%</td><td>50.31%</td><td>49.27%</td><td>+0.29 pp</td></tr>
+          <tr><td>2026 YTD</td><td>26,957</td><td>51.62%</td><td>50.32%</td><td>49.95%</td><td>+0.23 pp</td></tr>
+          <tr><td>Pooled</td><td>301,289</td><td>51.05%</td><td>50.46%</td><td>49.81%</td><td>+0.20 pp</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="section" id="run">
+      <h2>Run the live desk</h2>
+      <p>GitHub Pages hosts this site. The scanner itself is Python — FastAPI, Yahoo Finance, the trained model on disk.</p>
+      <pre>git clone https://github.com/Ajeenckya5/stock-signal-scanner.git
+cd stock-signal-scanner
+pip install -r requirements.txt
+python app.py</pre>
+      <p style="margin-top:0.8rem">Open <span class="mono">http://localhost:8000</span> for the insights desk and <span class="mono">/intraday</span> for the 5-minute tape. Retrain with <span class="mono">python pred_model.py</span> or Universe → Train.</p>
+    </section>
+
+    <footer class="foot">
+      <span>Educational research. Not financial advice. No offer to buy or sell securities.</span>
+      <a href="https://github.com/Ajeenckya5/stock-signal-scanner">github.com/Ajeenckya5/stock-signal-scanner</a>
+    </footer>
+  </div>
+  <script>
+    function tick() {
+      const hmOf = (tz) => new Date().toLocaleTimeString("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: false });
+      const dowOf = (tz) => new Date().toLocaleDateString("en-US", { timeZone: tz, weekday: "short" });
+      const hm = hmOf("America/New_York");
+      const ist = hmOf("Asia/Kolkata");
+      const [h, m] = hm.split(":").map(Number);
+      const mins = h * 60 + m;
+      const nyWeekday = !["Sat", "Sun"].includes(dowOf("America/New_York"));
+      const nyOpen = nyWeekday && mins >= 9 * 60 + 30 && mins < 16 * 60;
+      const [ih, im] = ist.split(":").map(Number);
+      const imins = ih * 60 + im;
+      const nseOpen = !["Sat", "Sun"].includes(dowOf("Asia/Kolkata")) && imins >= 9 * 60 + 15 && imins < 15 * 60 + 30;
+      document.getElementById("clocks").innerHTML =
+        `<span><i class="dot ${nyOpen ? "open" : ""}"></i><strong>NYSE</strong>${hm} ET</span>` +
+        `<span><i class="dot ${nseOpen ? "open" : ""}"></i><strong>NSE</strong>${ist} IST</span>`;
+    }
+    tick();
+    setInterval(tick, 30000);
+  </script>
+</body>
+</html>

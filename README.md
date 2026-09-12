@@ -9,6 +9,8 @@ Two desks share the same research stack. Leave `python app.py` running and the *
 
 Signals are **BUY or SELL only** (no HOLD). This is research/educational software, not financial advice.
 
+**Website:** https://ajeenckya5.github.io/predi/
+
 ---
 
 ## What the UI does
