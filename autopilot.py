@@ -113,6 +113,11 @@ def market_clocks() -> Dict[str, Any]:
     }
 
 
+def _forecast_for(r: Dict[str, Any]) -> Dict[str, Any]:
+    from forecast import derive_forecast
+    return derive_forecast(r)
+
+
 def _compact_row(r: Dict[str, Any]) -> Dict[str, Any]:
     q = r.get("quant") or {}
     news = r.get("news") or []
@@ -154,6 +159,7 @@ def _compact_row(r: Dict[str, Any]) -> Dict[str, Any]:
             "max_drawdown_pct": q.get("max_drawdown_pct"),
         },
         "ml": r.get("ml"),
+        "forecast": r.get("forecast") or _forecast_for(r),
     }
 
 
@@ -217,8 +223,35 @@ def build_insights(results: List[Dict[str, Any]]) -> Dict[str, Any]:
                 "currency": r.get("currency"),
                 "market": r.get("market"),
                 "why": (r.get("reasons") or [""])[0],
+                "forecast": r.get("forecast") or _forecast_for(r),
             })
         return out
+
+    def move_card(r: Dict[str, Any]) -> Dict[str, Any]:
+        f = r.get("forecast") or _forecast_for(r)
+        return {
+            "ticker": r.get("ticker"),
+            "action": r.get("action"),
+            "score": r.get("score"),
+            "price": r.get("price"),
+            "change_pct": r.get("change_pct"),
+            "currency": r.get("currency"),
+            "market": r.get("market"),
+            "why": (r.get("reasons") or [""])[0],
+            "ml": {"p_buy": (r.get("ml") or {}).get("p_buy")} if r.get("ml") else None,
+            "forecast": f,
+        }
+
+    up, down = [], []
+    for r in ok:
+        f = r.get("forecast") or _forecast_for(r)
+        r = {**r, "forecast": f}
+        if f.get("direction") == "up":
+            up.append(r)
+        else:
+            down.append(r)
+    up.sort(key=lambda x: float((x.get("forecast") or {}).get("expected_pct") or 0), reverse=True)
+    down.sort(key=lambda x: float((x.get("forecast") or {}).get("expected_pct") or 0))
 
     return {
         "headline": headline,
@@ -226,6 +259,8 @@ def build_insights(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_score": round(avg, 3),
         "buy_count": len(buys),
         "sell_count": len(sells),
+        "up_count": len(up),
+        "down_count": len(down),
         "error_count": sum(1 for r in results if r.get("action") == "ERROR"),
         "high_conviction": len(conv),
         "trending": trending,
@@ -233,6 +268,8 @@ def build_insights(results: List[Dict[str, Any]]) -> Dict[str, Any]:
         "high_vol": high_vol,
         "top_buys": slim(buys),
         "top_sells": slim(sells),
+        "can_go_up": [move_card(r) for r in up],
+        "can_go_down": [move_card(r) for r in down],
         "conviction": slim(sorted(conv, key=lambda x: abs(float(x.get("score") or 0)), reverse=True), 8),
         "alerts": alerts[:12],
         "updated_at": _now_iso(),
@@ -411,15 +448,28 @@ def get_snapshot() -> Dict[str, Any]:
         state = dict(_state)
         cfg = dict(_config)
     clocks = market_clocks()
+    results = []
+    for r in (snap.get("results") or []):
+        if not isinstance(r, dict):
+            continue
+        row = dict(r)
+        if (row.get("action") or "") in ("BUY", "SELL"):
+            row["forecast"] = _forecast_for({**row, "forecast": row.get("forecast")})
+        results.append(row)
+    insights = build_insights(results) if results else (snap.get("insights") or build_insights([]))
+    intra = snap.get("intraday") or []
+    intra_ins = snap.get("intraday_insights")
+    if intra and not (intra_ins and intra_ins.get("can_go_up") is not None):
+        intra_ins = build_insights(intra)
     return {
         "config": cfg,
         "state": state,
         "clocks": clocks,
         "pulse": snap.get("pulse") or [],
-        "results": snap.get("results") or [],
-        "insights": snap.get("insights") or build_insights([]),
-        "intraday": snap.get("intraday") or [],
-        "intraday_insights": snap.get("intraday_insights") or None,
+        "results": results,
+        "insights": insights,
+        "intraday": intra,
+        "intraday_insights": intra_ins,
     }
 
 

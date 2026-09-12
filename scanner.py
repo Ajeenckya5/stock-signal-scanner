@@ -274,6 +274,7 @@ class SignalResult:
     candle: Optional[str] = None
     quant: Optional[Dict] = None
     ml: Optional[Dict] = None
+    forecast: Optional[Dict] = None
 
 
 # Indicators that participate in the composite score (manual selection applies to these).
@@ -749,6 +750,40 @@ def analyze_ticker(
         from datetime import datetime, timedelta
         target_date = (datetime.now() + timedelta(days=target_days)).strftime("%Y-%m-%d")
 
+        hist_pred = None
+        try:
+            from historical_predict import compute_historical_prediction
+            fwd = max(1, int(spec.get("fwd_bars") or 5))
+            hist_pred = compute_historical_prediction(
+                data, close, high_series, low_series, support, resistance, fwd_days=fwd
+            )
+        except Exception:
+            hist_pred = None
+        hist_compact = None
+        if isinstance(hist_pred, dict) and hist_pred.get("expected_fwd_return_pct") is not None:
+            hist_compact = {
+                "expected_fwd_return_pct": hist_pred.get("expected_fwd_return_pct"),
+                "direction": hist_pred.get("direction"),
+                "confidence": hist_pred.get("confidence"),
+                "summary": (hist_pred.get("summary") or "")[:180],
+            }
+        from forecast import build_forecast
+        forecast = build_forecast(
+            price=price,
+            action=action,
+            score=score,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            support=support,
+            resistance=resistance,
+            atr=atr,
+            target_days=target_days,
+            ml=ml_pred if isinstance(ml_pred, dict) else None,
+            hist=hist_compact,
+            candle=candle,
+            why=(reasons[0] if reasons else None),
+        )
+
         # Build news list from raw_news — absolute external URLs only (see normalize_news_url)
         news_list = []
         for n in (raw_news or [])[:8]:
@@ -802,6 +837,7 @@ def analyze_ticker(
             candle=candle,
             quant=quant_bundle,
             ml=ml_pred,
+            forecast=forecast,
         )
 
     except Exception as e:
@@ -920,6 +956,7 @@ def scan_tickers(
             "candle": r.candle,
             "quant": q,
             "ml": r.ml,
+            "forecast": r.forecast,
         }
         if filter_action and r.action != filter_action:
             continue

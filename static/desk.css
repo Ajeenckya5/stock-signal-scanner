@@ -263,6 +263,7 @@ a.nav-btn { color: var(--muted); }
   border-top: none;
 }
 .hero + .hero { border-top: none; }
+.move-hero { border-top: 1px solid var(--line); }
 .hero .panel {
   background: transparent;
   border: none;
@@ -365,6 +366,49 @@ a.chip:hover { color: var(--text); }
   color: var(--faint);
   margin-right: 0.25rem;
 }
+.move-list {
+  max-height: 28rem;
+  overflow: auto;
+}
+.move-list-full { max-height: calc(100vh - 220px); }
+.move {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  color: inherit;
+  padding: 0.55rem 0.1rem 0.6rem;
+  cursor: pointer;
+  font: inherit;
+}
+.move:hover { background: var(--bg-hover); }
+.move:last-child { border-bottom: none; }
+.move-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+}
+.move-pct {
+  font-family: var(--mono);
+  font-size: 1.05rem;
+  font-weight: 500;
+  margin: 0.18rem 0 0.12rem;
+}
+.move-to {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 0.35rem;
+}
+.move-meta, .move-why {
+  font-size: 0.72rem;
+  color: var(--faint);
+  line-height: 1.4;
+}
+.move-why { color: var(--muted); margin-top: 0.12rem; }
 
 .flab, label.flab {
   display: block;

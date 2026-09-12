@@ -10,7 +10,7 @@
   <script>
     (function () {
       var pages = /\.github\.io$/.test(location.hostname);
-      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt2' : '/static/desk.css?v=bt2') + '" />');
+      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt3' : '/static/desk.css?v=bt3') + '" />');
     })();
   </script>
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -43,6 +43,16 @@
         <p class="page-sub">Yahoo history is about 60 sessions. Not Level-2.</p>
       </div>
       <div class="kpis" id="kpis"></div>
+      <div class="hero" style="margin-bottom:0.85rem;border-top:1px solid var(--line)">
+        <div class="panel">
+          <h2>Can go up</h2>
+          <div class="move-list" id="upMoves"></div>
+        </div>
+        <div class="panel">
+          <h2>Can go down</h2>
+          <div class="move-list" id="downMoves"></div>
+        </div>
+      </div>
       <div class="panel" style="margin-bottom:0.85rem">
         <h2>Session note</h2>
         <p class="headline" id="headline">Waiting for 5-minute tape…</p>
@@ -86,6 +96,48 @@
       return '$';
     }
     function fmt(v, n=2) { return v == null ? '—' : Number(v).toFixed(n); }
+    function signedPct(v) {
+      if (v == null || Number.isNaN(Number(v))) return '—';
+      const n = Number(v);
+      return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+    }
+    function forecastOf(r) {
+      if (r && r.forecast && r.forecast.expected_pct != null) return r.forecast;
+      const px = Number(r.price), tp = Number(r.take_profit);
+      const expected = (px && isFinite(tp)) ? ((tp - px) / px) * 100 : (r.action === 'BUY' ? 0.8 : -0.8);
+      const pUp = r.action === 'BUY' ? 0.58 : 0.42;
+      return {
+        direction: pUp >= 0.5 ? 'up' : 'down',
+        p_up: pUp,
+        expected_pct: expected,
+        low_pct: r.action === 'BUY' ? -0.4 : expected * 1.2,
+        high_pct: r.action === 'BUY' ? expected * 1.2 : 0.4,
+        target: tp,
+        horizon: 'this session',
+        why: (r.reasons || [])[0] || '',
+      };
+    }
+    function paintMoves(list) {
+      const up = [], down = [];
+      (list || []).forEach(r => {
+        if (r.action !== 'BUY' && r.action !== 'SELL') return;
+        const f = forecastOf(r);
+        (f.direction === 'up' ? up : down).push({ r, f });
+      });
+      up.sort((a,b) => (b.f.expected_pct||0) - (a.f.expected_pct||0));
+      down.sort((a,b) => (a.f.expected_pct||0) - (b.f.expected_pct||0));
+      const html = (items, empty) => items.length ? items.map(({r,f}) => {
+        const cur = currSym(r.ticker, r.currency);
+        return `<div class="move">
+          <div class="move-top"><span class="ticker">${esc(r.ticker)}</span><span class="tag ${(r.action||'').toLowerCase()}">${esc(r.action)}</span></div>
+          <div class="move-pct ${f.direction==='up'?'up':'down'}">${signedPct(f.expected_pct)} <span class="move-to">to ${cur}${fmt(f.target)}</span></div>
+          <div class="move-meta">possible ${signedPct(f.low_pct)} to ${signedPct(f.high_pct)} · this session</div>
+          <div class="move-why">${esc(f.why || '')}</div>
+        </div>`;
+      }).join('') : `<p class="hint">${empty}</p>`;
+      if ($('upMoves')) $('upMoves').innerHTML = html(up, 'No 5m upside names.');
+      if ($('downMoves')) $('downMoves').innerHTML = html(down, 'No 5m downside names.');
+    }
 
     async function clocks() {
       try {
@@ -104,6 +156,7 @@
           ['Auto names', intra.length, ''],
         ].map(([l,v,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div></div>`).join('');
         if (!$('results').dataset.manual && intra.length) render(intra, false);
+        paintMoves(intra);
       } catch (e) {}
     }
 
@@ -118,6 +171,7 @@
           <div class="card-h"><span class="ticker">${esc(r.ticker)}</span><span class="tag ${(r.action||'').toLowerCase()}">${esc(r.action)}</span></div>
           <div class="price">${curr}${fmt(r.price)}</div>
           <div class="${chg} mono">${r.change_pct>=0?'+':''}${fmt(r.change_pct,3)}%</div>
+          <div class="move-pct ${(forecastOf(r).direction==='up')?'up':'down'}">${signedPct(forecastOf(r).expected_pct)} <span class="move-to">to ${curr}${fmt(forecastOf(r).target)}</span></div>
           <div class="meta">RSI ${fmt(r.rsi,1)} · RVOL ${fmt(r.rvol)}x · VWAP ${r.vwap != null ? curr+fmt(r.vwap) : '—'}</div>
           <div class="meta">SL ${curr}${fmt(r.stop_loss)} · TP ${curr}${fmt(r.take_profit)}</div>
           ${reasons ? `<ul class="alert-list">${reasons}</ul>` : ''}
@@ -164,6 +218,7 @@
         if (!res.ok) throw new Error(data.detail || res.statusText);
         $('results').dataset.manual = '1';
         render(data.results || [], true);
+        paintMoves(data.results || []);
         $('status').textContent = `${(data.results||[]).length} names`;
       } catch (e) {
         $('status').innerHTML = `<span class="error-msg">${esc(e.message)}</span>`;

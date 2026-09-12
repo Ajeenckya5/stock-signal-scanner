@@ -10,7 +10,7 @@
   <script>
     (function () {
       var pages = /\.github\.io$/.test(location.hostname);
-      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt2' : '/static/desk.css?v=bt2') + '" />');
+      document.write('<link rel="stylesheet" href="' + (pages ? 'desk.css?v=bt3' : '/static/desk.css?v=bt3') + '" />');
     })();
   </script>
   <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -37,6 +37,7 @@
       <div class="side-kicker">Desk</div>
       <button class="nav-btn active" data-view="overview">Overview <span class="nav-k">1</span></button>
       <button class="nav-btn" data-view="book">Signal book <span class="nav-k">2</span></button>
+      <button class="nav-btn" data-view="moves">Moves <span class="nav-k">4</span></button>
       <button class="nav-btn" data-view="choose">Universe <span class="nav-k">3</span></button>
       <div class="side-kicker">Horizon</div>
       <button class="nav-btn active" id="navLong" type="button">Long-term</button>
@@ -75,12 +76,14 @@
         </div>
         <div class="hero">
           <div class="panel">
-            <h2>Longs</h2>
-            <div id="topBuys"></div>
+            <h2>Can go up</h2>
+            <p class="hint" id="upHint">Live predicted rise on this horizon</p>
+            <div class="move-list" id="topBuys"></div>
           </div>
           <div class="panel">
-            <h2>Shorts</h2>
-            <div id="topSells"></div>
+            <h2>Can go down</h2>
+            <p class="hint" id="downHint">Live predicted fall on this horizon</p>
+            <div class="move-list" id="topSells"></div>
           </div>
         </div>
       </section>
@@ -106,6 +109,35 @@
           <span class="status" id="bookStatus"></span>
         </div>
         <div id="book"></div>
+      </section>
+
+      <section class="view" id="view-moves">
+        <div class="page-head">
+          <h1>Moves</h1>
+          <p class="page-sub" id="movesSub">Live predictions per name · educational, not advice</p>
+        </div>
+        <div class="horizon">
+          <span class="hlab">Long-term</span>
+          <button class="chip active" type="button" data-horizon="24h">Daily 24h</button>
+          <button class="chip" type="button" data-horizon="1mo">1 month</button>
+          <button class="chip" type="button" data-horizon="3mo">3 month</button>
+          <button class="chip" type="button" data-horizon="6mo">6 month</button>
+        </div>
+        <div class="toolbar">
+          <button class="chip active" type="button" id="moveAll">All names</button>
+          <button class="chip" type="button" id="moveHi">High conviction</button>
+          <span class="status" id="moveStatus"></span>
+        </div>
+        <div class="hero move-hero">
+          <div class="panel">
+            <h2 id="upHead">Can go up</h2>
+            <div class="move-list move-list-full" id="upMoves"></div>
+          </div>
+          <div class="panel">
+            <h2 id="downHead">Can go down</h2>
+            <div class="move-list move-list-full" id="downMoves"></div>
+          </div>
+        </div>
       </section>
 
       <section class="view" id="view-choose">
@@ -234,6 +266,7 @@
     let bookFilter = '';
     let bookSrc = 'auto';
     let lastCandle = '24h';
+    let moveHiOnly = false;
     let searchTimeout = null;
     let drawerChart = null;
 
@@ -277,6 +310,7 @@
       const lab = HORIZON_LABELS[lastCandle] || lastCandle;
       if ($('pageSub')) $('pageSub').textContent = 'Long-term · ' + lab + ' · US and India';
       if ($('bookSub')) $('bookSub').textContent = 'Long-term book · ' + lab;
+      if ($('movesSub')) $('movesSub').textContent = 'Live predictions · ' + lab + ' · educational, not advice';
     }
     async function applyHorizon(c) {
       if (!c) return;
@@ -304,6 +338,7 @@
       if (e.key === '1') showView('overview');
       if (e.key === '2') showView('book');
       if (e.key === '3') showView('choose');
+      if (e.key === '4') showView('moves');
     });
     window.addEventListener('hashchange', () => showView(location.hash.replace('#', '')));
     if (location.hash) showView(location.hash.replace('#', ''));
@@ -331,12 +366,125 @@
       const tilt = ins.tilt || '—';
       $('kpis').innerHTML = [
         ['Tilt', tilt.toUpperCase(), '', tilt === 'bearish' ? 'sell' : tilt === 'bullish' ? 'buy' : ''],
-        ['Longs', ins.buy_count ?? 0, 'buy names', 'buy'],
-        ['Shorts', ins.sell_count ?? 0, 'sell names', 'sell'],
+        ['Can go up', ins.up_count ?? ins.buy_count ?? 0, 'predicted rise', 'buy'],
+        ['Can go down', ins.down_count ?? ins.sell_count ?? 0, 'predicted fall', 'sell'],
         ['Conviction', ins.high_conviction ?? 0, '|score| ≥ 0.35', ''],
         ['Trending', ins.trending ?? 0, 'Hurst > 0.55', ''],
         ['Names', state.names ?? 0, state.scan_in_progress ? 'scanning' : 'last pass', ''],
       ].map(([l,v,s,c]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val ${c}">${v}</div><div class="sub">${s}</div></div>`).join('');
+    }
+
+    const HORIZON_MOVE = { '24h': '5 sessions', '1mo': '3 months', '3mo': '2 quarters', '6mo': '2 half-years' };
+    function forecastOf(r) {
+      if (r && r.forecast && r.forecast.expected_pct != null) {
+        const f = r.forecast;
+        const dir = Number(f.expected_pct) >= 0 ? 'up' : 'down';
+        return Object.assign({}, f, { direction: dir });
+      }
+      const px = Number(r.price);
+      const tp = Number(r.take_profit);
+      const sl = Number(r.stop_loss);
+      const sup = Number(r.support);
+      const res = Number(r.resistance);
+      const ml = r.ml || {};
+      let pUp = ml.p_buy;
+      if (pUp == null) {
+        const sc = Number(r.score) || 0;
+        pUp = 0.5 + 0.35 * Math.tanh(sc * 1.8);
+        if (r.action === 'BUY') pUp = Math.max(pUp, 0.52);
+        if (r.action === 'SELL') pUp = Math.min(pUp, 0.48);
+      }
+      let expected = (px && isFinite(tp)) ? ((tp - px) / px) * 100 : (r.action === 'BUY' ? 2.5 : -2.5);
+      const direction = expected >= 0 ? 'up' : 'down';
+      const atrPct = (px && isFinite(sl)) ? Math.abs(px - sl) / px / 1.5 * 100 : Math.abs(expected);
+      const resPct = (px && isFinite(res)) ? ((res - px) / px) * 100 : expected;
+      const supPct = (px && isFinite(sup)) ? ((sup - px) / px) * 100 : expected;
+      const high = Math.max(expected, resPct, atrPct * 1.2);
+      const low = Math.min(expected, supPct, -atrPct * 1.2);
+      const target = direction === 'up'
+        ? (isFinite(tp) && tp >= px ? tp : (isFinite(res) ? res : px * (1 + Math.abs(expected) / 100)))
+        : (isFinite(tp) && tp <= px ? tp : (isFinite(sup) ? sup : px * (1 - Math.abs(expected) / 100)));
+      return {
+        direction,
+        p_up: pUp,
+        expected_pct: expected,
+        low_pct: low,
+        high_pct: high,
+        target,
+        stop: sl,
+        horizon: HORIZON_MOVE[lastCandle] || '5 sessions',
+        horizon_days: r.target_achieve_days,
+        why: (r.reasons || [])[0] || '',
+      };
+    }
+    function signedPct(v) {
+      if (v == null || Number.isNaN(Number(v))) return '—';
+      const n = Number(v);
+      return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+    }
+    function partitionMoves(rows, hiOnly) {
+      const ok = (rows || []).filter(r => r.action === 'BUY' || r.action === 'SELL');
+      const up = [], down = [];
+      for (const r of ok) {
+        const f = forecastOf(r);
+        if (hiOnly) {
+          const sc = Math.abs(Number(r.score) || 0);
+          const p = Number(f.p_up);
+          if (sc < 0.35 && !(p >= 0.62 || p <= 0.38)) continue;
+        }
+        (f.direction === 'up' ? up : down).push({ r, f });
+      }
+      up.sort((a, b) => (Number(b.f.expected_pct) || 0) - (Number(a.f.expected_pct) || 0));
+      down.sort((a, b) => (Number(a.f.expected_pct) || 0) - (Number(b.f.expected_pct) || 0));
+      return { up, down };
+    }
+    function moveCardHtml(item) {
+      const r = item.r, f = item.f;
+      const cur = currSym(r.ticker, r.currency);
+      const dir = f.direction === 'up' ? 'up' : 'down';
+      const days = f.horizon_days ? ` · ~${f.horizon_days}d` : '';
+      return `<button type="button" class="move" data-t="${esc(r.ticker)}">
+        <div class="move-top">
+          <span class="ticker">${esc(r.ticker)} <span class="mkt">${esc(r.market || '')}</span></span>
+          <span class="tag ${(r.action || '').toLowerCase()}">${esc(r.action)}</span>
+        </div>
+        <div class="move-pct ${dir}">${signedPct(f.expected_pct)} <span class="move-to">to ${cur}${fmt(f.target)}</span></div>
+        <div class="move-meta">P(up) ${fmt(f.p_up, 2)} · possible ${signedPct(f.low_pct)} to ${signedPct(f.high_pct)} · ${esc(f.horizon || '')}${days}</div>
+        <div class="move-why">${esc(f.why || (r.reasons || [])[0] || '')}</div>
+      </button>`;
+    }
+    function bindMoveClicks(el) {
+      if (!el) return;
+      el.querySelectorAll('.move[data-t]').forEach(btn => {
+        btn.onclick = () => {
+          const t = btn.dataset.t;
+          const row = (snap.results || []).find(x => x.ticker === t) || (manual || []).find(x => x.ticker === t);
+          if (row) openDrawer(row);
+        };
+      });
+    }
+    function renderMoveList(el, items, empty) {
+      if (!el) return;
+      el.innerHTML = items.length ? items.map(moveCardHtml).join('') : `<p class="hint">${empty}</p>`;
+      bindMoveClicks(el);
+    }
+    function liveRows() {
+      return bookSrc === 'manual' && manual.length ? manual : (snap.results || []);
+    }
+    function renderMoves() {
+      const { up, down } = partitionMoves(liveRows(), false);
+      const ovUp = up.slice(0, 12);
+      const ovDown = down.slice(0, 12);
+      if ($('upHint')) $('upHint').textContent = `${up.length} names · expected move on ${HORIZON_MOVE[lastCandle] || 'this horizon'}`;
+      if ($('downHint')) $('downHint').textContent = `${down.length} names · expected move on ${HORIZON_MOVE[lastCandle] || 'this horizon'}`;
+      renderMoveList($('topBuys'), ovUp, 'No upside names on this pass.');
+      renderMoveList($('topSells'), ovDown, 'No downside names on this pass.');
+      const part = partitionMoves(liveRows(), moveHiOnly);
+      if ($('upHead')) $('upHead').textContent = `Can go up (${part.up.length})`;
+      if ($('downHead')) $('downHead').textContent = `Can go down (${part.down.length})`;
+      if ($('moveStatus')) $('moveStatus').textContent = moveHiOnly ? 'High-conviction only' : 'Live with autopilot';
+      renderMoveList($('upMoves'), part.up, 'No names predicted to rise.');
+      renderMoveList($('downMoves'), part.down, 'No names predicted to fall.');
     }
 
     function miniRows(arr) {
@@ -352,10 +500,9 @@
       $('headline').textContent = ins.headline || 'Awaiting first background pass.';
       $('insightSub').textContent = `Avg score ${fmt(ins.avg_score, 3)} · high-vol names ${ins.high_vol ?? 0} · mean-reverting ${ins.mean_reverting ?? 0}`;
       $('conviction').innerHTML = (ins.conviction && ins.conviction.length) ? miniRows(ins.conviction) : '';
-      $('topBuys').innerHTML = miniRows(ins.top_buys);
-      $('topSells').innerHTML = miniRows(ins.top_sells);
       const alerts = ins.alerts || [];
       $('alerts').innerHTML = alerts.length ? alerts.map(a => `<li>${esc(a)}</li>`).join('') : '<li>No stretched alerts on this pass.</li>';
+      renderMoves();
     }
 
     function bookRows() {
@@ -372,22 +519,21 @@
         return;
       }
       $('book').innerHTML = `<div class="book-wrap"><table class="book-table"><thead><tr>
-        <th>Ticker</th><th>Side</th><th class="num">Score</th><th class="num">P(lead 5d)</th><th class="num">Price</th><th class="num">Chg</th><th class="num">RSI</th><th>Hurst</th><th>Note</th>
+        <th>Ticker</th><th>Side</th><th class="num">Move</th><th class="num">Target</th><th class="num">P(up)</th><th class="num">Score</th><th class="num">Price</th><th class="num">Chg</th><th>Note</th>
       </tr></thead><tbody>${list.map((r,i) => {
         const cur = currSym(r.ticker, r.currency);
         const cls = (r.change_pct || 0) >= 0 ? 'up' : 'down';
-        const q = r.quant || {};
-        const ml = r.ml || {};
-        const pb = ml.p_buy;
+        const f = forecastOf(r);
+        const dir = f.direction === 'up' ? 'up' : 'down';
         return `<tr data-i="${i}">
           <td class="ticker">${esc(r.ticker)}<span class="mkt">${esc(r.market || '')}</span></td>
           <td><span class="tag ${(r.action||'').toLowerCase()}">${esc(r.action)}</span></td>
+          <td class="mono num ${dir}">${signedPct(f.expected_pct)}</td>
+          <td class="mono num">${cur}${fmt(f.target)}</td>
+          <td class="mono num">${fmt(f.p_up,2)}</td>
           <td class="mono num">${fmt(r.score,3)}</td>
-          <td class="mono num">${pb == null ? '—' : fmt(pb,2)}</td>
           <td class="mono num">${cur}${fmt(r.price)}</td>
           <td class="mono num ${cls}">${r.change_pct>=0?'+':''}${fmt(r.change_pct)}%</td>
-          <td class="mono num">${fmt(r.rsi,1)}</td>
-          <td>${esc(q.hurst_read || '—')}</td>
           <td class="insight">${esc((r.reasons||[])[0] || '')}</td>
         </tr>`;
       }).join('')}</tbody></table></div>`;
@@ -399,6 +545,7 @@
     function openDrawer(r) {
       const cur = currSym(r.ticker, r.currency);
       const q = r.quant || {};
+      const f = forecastOf(r);
       const news = (r.news || []).map(n => {
         const href = safeNewsHref(n.url || '');
         const t = esc((n.title || '').slice(0, 90));
@@ -416,6 +563,9 @@
         <div class="mini"><span>Quant / Sharpe / β</span><span class="mono">${fmt(q.quant_score,3)} / ${fmt(q.sharpe,2)} / ${fmt(q.beta,2)}</span></div>
         <div class="mini"><span>Hurst / regime</span><span>${esc(q.hurst_read || '—')} · ${esc(q.vol_regime || '—')}</span></div>
         <div class="mini"><span>P(lead 5d)</span><span class="mono">${(r.ml && r.ml.p_buy != null) ? fmt(r.ml.p_buy, 3) : '—'}</span></div>
+        <div class="mini"><span>Expected move</span><span class="mono ${f.direction==='up'?'up':'down'}">${signedPct(f.expected_pct)} to ${cur}${fmt(f.target)}</span></div>
+        <div class="mini"><span>Possible range</span><span class="mono">${signedPct(f.low_pct)} to ${signedPct(f.high_pct)}</span></div>
+        <div class="mini"><span>Horizon</span><span>${esc(f.horizon || '—')}${f.horizon_days ? ' · ~' + f.horizon_days + 'd' : ''}</span></div>
         <ul class="alert-list">${(r.reasons||[]).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
         <div class="news-list">${news || '<span class="hint">No headlines</span>'}</div>
         <div class="feedback">Mark this call
@@ -466,8 +616,10 @@
         renderBook();
       };
     });
-    $('srcAuto').onclick = () => { bookSrc = 'auto'; $('srcAuto').classList.add('active'); $('srcManual').classList.remove('active'); renderBook(); };
-    $('srcManual').onclick = () => { bookSrc = 'manual'; $('srcManual').classList.add('active'); $('srcAuto').classList.remove('active'); renderBook(); };
+    $('srcAuto').onclick = () => { bookSrc = 'auto'; $('srcAuto').classList.add('active'); $('srcManual').classList.remove('active'); renderBook(); renderMoves(); };
+    $('srcManual').onclick = () => { bookSrc = 'manual'; $('srcManual').classList.add('active'); $('srcAuto').classList.remove('active'); renderBook(); renderMoves(); };
+    if ($('moveAll')) $('moveAll').onclick = () => { moveHiOnly = false; $('moveAll').classList.add('active'); $('moveHi').classList.remove('active'); renderMoves(); };
+    if ($('moveHi')) $('moveHi').onclick = () => { moveHiOnly = true; $('moveHi').classList.add('active'); $('moveAll').classList.remove('active'); renderMoves(); };
 
     function applySnap(d) {
       snap = d;
@@ -477,6 +629,7 @@
       renderPulse(d.pulse || []);
       renderKpis(d.insights || {}, d.state || {});
       renderInsights(d.insights || {});
+      renderMoves();
       if (bookSrc === 'auto') renderBook();
       const st = d.state || {};
       const cfg = d.config || {};
@@ -598,6 +751,7 @@
         $('srcManual').classList.add('active'); $('srcAuto').classList.remove('active');
         showView('book');
         renderBook();
+        renderMoves();
         $('status').textContent = `Manual book: ${manual.length} names`;
       } catch (e) {
         $('status').innerHTML = `<span class="error-msg">${esc(e.message)}</span>`;

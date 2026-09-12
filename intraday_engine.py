@@ -46,6 +46,26 @@ _CLOSE = {
 }
 
 
+def _intra_forecast(price, action, score, stop, take, support, resistance, atr_v, reasons):
+    from forecast import build_forecast
+    why = reasons[0] if reasons else None
+    return build_forecast(
+        price=price,
+        action=action,
+        score=score,
+        stop_loss=stop,
+        take_profit=take,
+        support=support,
+        resistance=resistance,
+        atr=atr_v,
+        target_days=None,
+        ml=None,
+        hist=None,
+        candle="5m",
+        why=why,
+    )
+
+
 def _localize_index(df: pd.DataFrame, mkt: str) -> pd.DataFrame:
     if df.empty:
         return df
@@ -386,6 +406,8 @@ def analyze_intraday(ticker: str) -> Dict[str, Any]:
         "support": round(support, 4),
         "resistance": round(resistance, 4),
         "reasons": reasons or ["No strong 5m structure"],
+        "candle": "5m",
+        "forecast": _intra_forecast(price, action, score, stop, take, support, resistance, atr_v, reasons),
         "session_start": str(sess.index[0]) if len(sess) else None,
         "session_end": str(sess.index[-1]) if len(sess) else None,
         "bars_session": int(len(sess)),
