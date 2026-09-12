@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
 
 
 STATIC = Path(__file__).parent / "static"
-app = FastAPI(title="predi | 24/7 US + India insights desk", lifespan=lifespan)
+app = FastAPI(title="Broadtape | 24/7 US + India insights desk", lifespan=lifespan)
 app.include_router(intraday_router, prefix="/intraday")
 
 

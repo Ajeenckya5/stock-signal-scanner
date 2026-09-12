@@ -93,6 +93,7 @@ a:hover { color: var(--gold); }
   color: var(--muted);
   font-size: 1.02rem;
 }
+.lede em { font-family: var(--serif); font-style: italic; color: var(--text); }
 .hero-actions { display: flex; gap: 0.6rem; margin-top: 1.4rem; flex-wrap: wrap; }
 .clocks {
   display: flex;

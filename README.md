@@ -1,4 +1,6 @@
-# predi_stock — 24/7 US + India insights desk
+# Broadtape — 24/7 US + India insights desk
+
+Named for the **broad tape**: the old ticker wire that printed every name, not just the leaders.
 
 Two desks share the same research stack. Leave `python app.py` running and the **autopilot** thread keeps analyzing in the background: index pulse every 2 minutes, a full BUY/SELL book on your cadence, and 5-minute tape while NYSE or NSE is open. You can still choose the universe, candle, watchlist, and run a one-off scan.
 
@@ -9,7 +11,7 @@ Two desks share the same research stack. Leave `python app.py` running and the *
 
 Signals are **BUY or SELL only** (no HOLD). This is research/educational software, not financial advice.
 
-**Website:** https://ajeenckya5.github.io/predi/
+**Website:** https://ajeenckya5.github.io/broadtape/
 
 ---
 
